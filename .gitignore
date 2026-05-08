@@ -5,4 +5,10 @@ dnabert2S.ipynb
 evo2.ipynb
 pipeline_new_virus.ipynb
 Calc_metrics.ipynb
-
+*.ipynb_checkpoints
+__pycache__
+.git
+p@k_for_k/
+for_article/
+kmer_sweep/
+compare_pk.ipynb
