@@ -259,7 +259,9 @@ def run_viralm_hook(env_name: str, fasta: Path, outdir: Path,
 # ─────────────────────────── МЕТРИКИ (из compute_metrics.py) ──────────────────
 
 from utils.compute_metrics import (compute_all_metrics, print_summary,
-                             save_summary_table)
+                             save_summary_table,
+                             compute_pairwise_cross_metrics,
+                             print_pairwise_summary)
 
 # ─────────────────────────── MAIN ────────────────────────────────────────────
 
@@ -285,6 +287,8 @@ def parse_args():
                    help='Пропустить извлечение эмбеддингов')
     p.add_argument('--skip_metrics',    action='store_true',
                    help='Пропустить расчёт метрик')
+    p.add_argument('--pairwise_cross',  action='store_true',
+                   help='Посчитать попарные cross-virus метрики (A↔B для всех пар)')
     return p.parse_args()
 
 
@@ -412,6 +416,20 @@ def main():
             print_summary(name, results, args.k, prefix='CROSS ')
 
         save_summary_table(all_fwd, all_rc, all_cross, metrics_dir)
+
+    # ── 5. Попарные cross-virus метрики ─────────────────────────────────
+    if args.pairwise_cross:
+        print("\n── Попарные cross-virus метрики ───────────────────────────────")
+        rows = compute_pairwise_cross_metrics(
+            preproc_files=preproc_files,
+            rc_files=rc_files,
+            models=args.models,
+            n_ref=args.n_ref,
+            k=args.k,
+            latent_dir=latent_dir,
+            metrics_dir=metrics_dir,
+        )
+        print_pairwise_summary(rows)
 
 
 if __name__ == '__main__':
