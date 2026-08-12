@@ -1,15 +1,22 @@
+# Python / Jupyter
+__pycache__
+*.ipynb_checkpoints
+.git
+
+# Local scratch notebooks (exploration, not part of the published pipeline)
 download_ictv.ipynb
 The_one_ring.ipynb
-activations_debug.log
 dnabert2S.ipynb
 evo2.ipynb
 pipeline_new_virus.ipynb
 Calc_metrics.ipynb
-*.ipynb_checkpoints
-__pycache__
-.git
-p@k_for_k/
-for_article/
-kmer_sweep/
 compare_pk.ipynb
+
+# Local scratch folders
+/p@k_for_k/
+/for_article/
+/kmer_sweep/
+
+# Large inputs and logs that are not shipped with the repository
 all_ictv_viruses_v1.fasta
+activations_debug.log

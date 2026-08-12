@@ -1,0 +1,22 @@
+# Reproducing the figures (visualization/main_figures.ipynb, supplementary_figures.ipynb)
+numpy
+pandas
+matplotlib
+openpyxl          # pandas needs it to read the .xlsx metric tables
+jupyterlab
+
+# Computing the metrics (run_pipeline.py, utils/, visualization/kmer_sweep.py)
+scikit-learn
+scikit-learn-extra  # KMedoids; the k-mer sweep falls back to KMeans if it is missing
+biopython
+tqdm
+torch
+transformers
+datasets
+
+# Only used by the exploratory notebooks in visualization/exploratory/
+seaborn
+adjustText
+
+# Evo2 and ViraLM are not installable alongside the packages above: they run in their own
+# conda environments (evo2_env, viralm), invoked by run_pipeline.py through `conda run`.
