@@ -127,9 +127,6 @@ sweeps k = 1..10 over `data/random_samples/` and writes
 | `viralm` | ViraLM | |
 | `evo2` | Evo2-7B | |
 
-GenaLM was also measured (`data/metrics/genalm/`) but is excluded from the article figures:
-it is trained on the human genome rather than on viral sequences.
-
 ## Metrics
 
 * **P@K** — precision among the K nearest neighbours in embedding space: the fraction of a

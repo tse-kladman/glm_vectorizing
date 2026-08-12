@@ -47,8 +47,7 @@ for _folder in (FIG_DATA, FIG_MAIN, FIG_SUPP):
 
 # --------------------------------------------------------------------------- #
 #  Models: canonical display order, pretty names and a colour-blind-safe        #
-#  palette (Okabe-Ito).  GenaLM is intentionally excluded (trained on the       #
-#  human genome, not viruses).                                                  #
+#  palette (Okabe-Ito).                                                         #
 # --------------------------------------------------------------------------- #
 MODELS = ["kmer", "dnabert2", "dnabertS", "viralm", "evo2"]
 
