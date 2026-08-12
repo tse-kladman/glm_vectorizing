@@ -24,7 +24,7 @@ compute_cross_virus.py — попарный cross-virus P@K между НОВЫ�
     python utils/compute_cross_virus.py --latent_dir data/latent_dim \
         --metrics_dir data/metrics \
         --names Egovirales_preproc Mriyavirales_preproc \
-        --models kmer dnabert2 genalm
+        --models kmer dnabert2 dnabertS evo2 viralm
 
 Результат: data/metrics/cross_virus/{Fwd_vs_Fwd,Fwd_vs_RC,RC_vs_Fwd,RC_vs_RC}/
            <model>/P@{k}_matrix_<query>_vs_<target>.xlsx  +  summary_cross_virus.xlsx
@@ -66,7 +66,7 @@ def _load_virus_embeddings(model_key: str, name: str, latent_dir: Path):
                 virus_by_layer[l] = viralm_get(data)
         return virus_by_layer
     else:
-        # K-mer, DNABERT, Evo2, GenaLM: один .pickle
+        # K-mer, DNABERT, Evo2: один .pickle
         ref_dir = latent_dir / model_key
         return _safe_pickle_load(ref_dir / f'{name}.pickle')
 
@@ -106,7 +106,7 @@ def _compute_cross_virus_kmer(query_name: str, target_name: str,
 
 def _compute_cross_virus_layered(model_key: str, query_name: str, target_name: str,
                                   n_ref: int, k: int, latent_dir: Path):
-    """Cross-virus P@K для моделей со слоями (DNABERT, Evo2, GenaLM)."""
+    """Cross-virus P@K для моделей со слоями (DNABERT, Evo2)."""
     ref_dir = latent_dir / model_key
     virus_query = _safe_pickle_load(ref_dir / f'{query_name}.pickle')
     virus_target = _safe_pickle_load(ref_dir / f'{target_name}.pickle')
@@ -350,7 +350,7 @@ def _parse_args():
     p.add_argument('--rc_names', nargs='*', default=None,
                    help='RC file names (default: REVERSECOMPLEMENT{name})')
     p.add_argument('--models', nargs='+',
-                   default=['kmer', 'dnabert2', 'dnabertS', 'evo2', 'viralm', 'genalm'])
+                   default=['kmer', 'dnabert2', 'dnabertS', 'evo2', 'viralm'])
     p.add_argument('--k', type=int, default=10)
     p.add_argument('--n_ref', type=int, default=50)
     p.add_argument('--max_workers', type=int, default=None)
