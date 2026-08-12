@@ -16,7 +16,3 @@ root-relative.
 | `compare_ref_vir.ipynb` | First pass at the model comparison on the reference set and on the unseen orders — the ancestor of Fig. 1, 2, 4, 5 and the supplementary per-layer plots. |
 | `compare_pk_new_vir.ipynb` | P@k vs k for the unseen orders — the ancestor of Fig. 6. |
 | `cross_virus_pk.ipynb` | Per-layer P@10 vs cross P@10 scatter for the Egovirales/Mriyavirales pair — the ancestor of Fig. 7. Needs `adjustText` and `seaborn`. |
-| `concat_genalm.ipynb` | One-off data fix: merges the separately computed GenaLM results into `data/metrics/P@K_new_virus/P@5.xlsx`. It **overwrites that file in place**; it has already been applied and should not be re-run. |
-
-GenaLM appears in some of these plots but is excluded from the article: it is trained on
-the human genome rather than on viral sequences.
