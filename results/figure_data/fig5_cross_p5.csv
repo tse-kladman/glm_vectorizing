@@ -1,0 +1,11 @@
+group,model,mean,std
+Egovirales,kmer,0.6107,0.0224
+Egovirales,dnabert2,0.6547,0.021
+Egovirales,dnabertS,0.8487,0.0121
+Egovirales,viralm,0.7814,0.0156
+Egovirales,evo2,0.8814,0.0095
+Mriyavirales,kmer,0.3405,0.0193
+Mriyavirales,dnabert2,0.4831,0.0177
+Mriyavirales,dnabertS,0.6522,0.0155
+Mriyavirales,viralm,0.4627,0.0156
+Mriyavirales,evo2,0.698,0.011
