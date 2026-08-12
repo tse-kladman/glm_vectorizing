@@ -122,6 +122,90 @@ def calc_cross_pk(reference: dict, virus_fwd: dict, virus_rc: dict, k=5):
 
     return float(np.mean(per_label_pks)) if per_label_pks else 0.0
 
+
+def calc_pair_cross_pk(reference, query_virus, target_virus, k=5):
+    """Cross P@K between two different viruses.
+
+    Space = all reference fragments + all target_virus fragments.
+    Query = all query_virus fragments (flattened across labels).
+    Metric = fraction of k nearest neighbours that belong to target_virus.
+
+    Does NOT do per-label matching — treats all target fragments as one class.
+    """
+    query_parts = [v for v in query_virus.values() if len(v) > 0]
+    if not query_parts:
+        return 0.0
+    query_embs = np.vstack(query_parts)
+
+    space_parts = []
+    n_target = 0
+    for rembs in reference.values():
+        if len(rembs) > 0:
+            space_parts.append(rembs)
+    for tembs in target_virus.values():
+        if len(tembs) > 0:
+            space_parts.append(tembs)
+            n_target += len(tembs)
+
+    if not space_parts or n_target == 0:
+        return 0.0
+
+    space_embs = np.vstack(space_parts)
+    space_is_target = np.array([False] * (len(space_embs) - n_target)
+                               + [True] * n_target)
+
+    combined = np.vstack([space_embs, query_embs])
+    combined = StandardScaler().fit_transform(combined)
+    space_scaled = combined[:len(space_embs)]
+    query_scaled = combined[len(space_embs):]
+
+    nn = NearestNeighbors(n_neighbors=k, metric='cosine')
+    nn.fit(space_scaled)
+    _, indices = nn.kneighbors(query_scaled)
+
+    precisions = space_is_target[indices].mean(axis=1)
+    return float(precisions.mean())
+
+
+def calc_pk_with_other(reference, query_virus, other_virus, k=5):
+    """P@K for query_virus in a space that also contains other_virus.
+
+    Per-label: space = ref + all of other_virus, query = one label of query_virus.
+    Measures whether query fragments still find their own label when another
+    virus occupies the embedding space.
+    """
+    per_label_pks = []
+    for vlabel, vembs in query_virus.items():
+        if len(vembs) == 0:
+            continue
+
+        all_emb, all_labels = [], []
+        for rlabel, rembs in reference.items():
+            if len(rembs) == 0:
+                continue
+            all_emb.append(rembs)
+            all_labels.extend([rlabel] * len(rembs))
+
+        for olabel, oembs in other_virus.items():
+            if len(oembs) == 0:
+                continue
+            all_emb.append(oembs)
+            all_labels.extend([olabel] * len(oembs))
+
+        start = len(all_labels)
+        all_emb.append(vembs)
+        all_labels.extend([vlabel] * len(vembs))
+
+        if not all_emb or start == 0:
+            continue
+
+        all_emb = np.vstack(all_emb)
+        new_indices = np.arange(start, len(all_labels))
+        all_emb = StandardScaler().fit_transform(all_emb)
+        per_label_pks.append(precision_K_new(all_emb, all_labels, new_indices, k=k))
+
+    return float(np.mean(per_label_pks)) if per_label_pks else 0.0
+
 # ─────────────────────────── УТИЛИТЫ ─────────────────────────────────────────
 
 def viralm_get(d: dict):
@@ -370,6 +454,301 @@ def _compute_cross_viralm(fwd_name: str, rc_name: str, n_ref: int, k: int,
     bl, bm, bs = _extract_best(pk_matrix)
     return {'best_layer': bl, 'mean_pk': bm, 'std_pk': bs,
             'pk_matrix': dict(pk_matrix)}
+
+# ─────────────────────────── PAIRWISE CROSS-VIRUS ────────────────────────────
+
+PAIRWISE_METRICS = [
+    'cross_1→2_fwd_rc', 'cross_1→2_rc_fwd', 'cross_1→2_fwd_fwd', 'cross_1→2_rc_rc',
+    'cross_2→1_fwd_rc', 'cross_2→1_rc_fwd', 'cross_2→1_fwd_fwd', 'cross_2→1_rc_rc',
+    'pk_fwd_1_in_2', 'pk_rc_1_in_2', 'pk_fwd_2_in_1', 'pk_rc_2_in_1',
+]
+
+
+def _compute_pairwise_cross_kmer(fwd_name_a, rc_name_a, fwd_name_b, rc_name_b,
+                                 n_ref, k, latent_dir):
+    ref_dir = latent_dir / 'kmer'
+    fwd_a = _safe_pickle_load(ref_dir / f'{fwd_name_a}.pickle')
+    rc_a  = _safe_pickle_load(ref_dir / f'{rc_name_a}.pickle')
+    fwd_b = _safe_pickle_load(ref_dir / f'{fwd_name_b}.pickle')
+    rc_b  = _safe_pickle_load(ref_dir / f'{rc_name_b}.pickle')
+    if any(v is None for v in [fwd_a, rc_a, fwd_b, rc_b]):
+        return None
+
+    def _worker(i):
+        ref = _safe_pickle_load(ref_dir / f'sample_{i}.pickle')
+        if ref is None:
+            return i, {}
+        return i, {
+            'cross_1→2_fwd_rc':  calc_pair_cross_pk(ref, fwd_a, rc_b, k),
+            'cross_1→2_rc_fwd':  calc_pair_cross_pk(ref, rc_a, fwd_b, k),
+            'cross_1→2_fwd_fwd': calc_pair_cross_pk(ref, fwd_a, fwd_b, k),
+            'cross_1→2_rc_rc':   calc_pair_cross_pk(ref, rc_a, rc_b, k),
+            'cross_2→1_fwd_rc':  calc_pair_cross_pk(ref, fwd_b, rc_a, k),
+            'cross_2→1_rc_fwd':  calc_pair_cross_pk(ref, rc_b, fwd_a, k),
+            'cross_2→1_fwd_fwd': calc_pair_cross_pk(ref, fwd_b, fwd_a, k),
+            'cross_2→1_rc_rc':   calc_pair_cross_pk(ref, rc_b, rc_a, k),
+            'pk_fwd_1_in_2':     calc_pk_with_other(ref, fwd_a, fwd_b, k),
+            'pk_rc_1_in_2':      calc_pk_with_other(ref, rc_a, rc_b, k),
+            'pk_fwd_2_in_1':     calc_pk_with_other(ref, fwd_b, fwd_a, k),
+            'pk_rc_2_in_1':      calc_pk_with_other(ref, rc_b, rc_a, k),
+        }
+
+    samples = {}
+    with ThreadPoolExecutor() as pool:
+        futs = [pool.submit(_worker, i) for i in range(n_ref)]
+        for f in tqdm(as_completed(futs), total=n_ref,
+                      desc=f'  pairwise kmer {fwd_name_a}<> {fwd_name_b}', leave=False):
+            i, metrics = f.result()
+            if metrics:
+                samples[i] = metrics
+
+    if not samples:
+        return None
+    result = {}
+    for mname in PAIRWISE_METRICS:
+        vals = [samples[i][mname] for i in sorted(samples) if mname in samples[i]]
+        result[mname] = {
+            'best_layer': '-',
+            'mean_pk': float(np.mean(vals)) if vals else 0.0,
+            'std_pk': float(np.std(vals)) if vals else 0.0,
+            'pk_by_sample': vals,
+        }
+    return result
+
+
+def _compute_pairwise_cross_layered(model_key, fwd_name_a, rc_name_a,
+                                    fwd_name_b, rc_name_b, n_ref, k, latent_dir):
+    ref_dir = latent_dir / model_key
+    fwd_a = _safe_pickle_load(ref_dir / f'{fwd_name_a}.pickle')
+    rc_a  = _safe_pickle_load(ref_dir / f'{rc_name_a}.pickle')
+    fwd_b = _safe_pickle_load(ref_dir / f'{fwd_name_b}.pickle')
+    rc_b  = _safe_pickle_load(ref_dir / f'{rc_name_b}.pickle')
+    if any(v is None for v in [fwd_a, rc_a, fwd_b, rc_b]):
+        return None
+
+    def _worker(i):
+        ref = _safe_pickle_load(ref_dir / f'sample_{i}.pickle')
+        if ref is None:
+            return i, {}
+        result = {}
+        for l in ref:
+            if not all(l in v for v in [fwd_a, rc_a, fwd_b, rc_b]):
+                continue
+            ra, fa, rca = ref[l], fwd_a[l], rc_a[l]
+            fb, rcb = fwd_b[l], rc_b[l]
+            if any(len(v) == 0 for v in [ra, fa, rca, fb, rcb]):
+                continue
+            result[l] = {
+                'cross_1→2_fwd_rc':  calc_pair_cross_pk(ra, fa, rcb, k),
+                'cross_1→2_rc_fwd':  calc_pair_cross_pk(ra, rca, fb, k),
+                'cross_1→2_fwd_fwd': calc_pair_cross_pk(ra, fa, fb, k),
+                'cross_1→2_rc_rc':   calc_pair_cross_pk(ra, rca, rcb, k),
+                'cross_2→1_fwd_rc':  calc_pair_cross_pk(ra, fb, rca, k),
+                'cross_2→1_rc_fwd':  calc_pair_cross_pk(ra, rcb, fa, k),
+                'cross_2→1_fwd_fwd': calc_pair_cross_pk(ra, fb, fa, k),
+                'cross_2→1_rc_rc':   calc_pair_cross_pk(ra, rcb, rca, k),
+                'pk_fwd_1_in_2':     calc_pk_with_other(ra, fa, fb, k),
+                'pk_rc_1_in_2':      calc_pk_with_other(ra, rca, rcb, k),
+                'pk_fwd_2_in_1':     calc_pk_with_other(ra, fb, fa, k),
+                'pk_rc_2_in_1':      calc_pk_with_other(ra, rcb, rca, k),
+            }
+        return i, result
+
+    pk_matrices = {m: defaultdict(dict) for m in PAIRWISE_METRICS}
+    with ThreadPoolExecutor() as pool:
+        futs = [pool.submit(_worker, i) for i in range(n_ref)]
+        for f in tqdm(as_completed(futs), total=n_ref,
+                      desc=f'  pairwise {model_key} {fwd_name_a}<> {fwd_name_b}', leave=False):
+            i, layer_results = f.result()
+            for l, metrics in layer_results.items():
+                for mname, mval in metrics.items():
+                    pk_matrices[mname][l][i] = mval
+
+    result = {}
+    for mname in PAIRWISE_METRICS:
+        if pk_matrices[mname]:
+            bl, bm, bs = _extract_best(pk_matrices[mname])
+            result[mname] = {'best_layer': bl, 'mean_pk': bm, 'std_pk': bs,
+                             'pk_matrix': dict(pk_matrices[mname])}
+    return result if result else None
+
+
+def _compute_pairwise_cross_viralm(fwd_name_a, rc_name_a, fwd_name_b, rc_name_b,
+                                   n_ref, k, latent_dir, n_layers=12):
+    ref_dir = latent_dir / 'viralm'
+
+    def _load_per_layer(name):
+        by_layer = {}
+        for l in range(1, n_layers + 1):
+            data = _safe_pickle_load(ref_dir / f'{name}_layer_{l}.pkl')
+            if data is not None:
+                by_layer[l] = viralm_get(data)
+        return by_layer
+
+    fwd_a = _load_per_layer(fwd_name_a)
+    rc_a  = _load_per_layer(rc_name_a)
+    fwd_b = _load_per_layer(fwd_name_b)
+    rc_b  = _load_per_layer(rc_name_b)
+    if not all([fwd_a, rc_a, fwd_b, rc_b]):
+        return None
+
+    def _worker(i):
+        result = {}
+        for l in range(1, n_layers + 1):
+            if l not in fwd_a or l not in rc_a or l not in fwd_b or l not in rc_b:
+                continue
+            ref_data = _safe_pickle_load(ref_dir / f'sample_{i}_layer_{l}.pkl')
+            if ref_data is None:
+                continue
+            ref = viralm_get(ref_data)
+            fa, rca = fwd_a[l], rc_a[l]
+            fb, rcb = fwd_b[l], rc_b[l]
+            if any(len(v) == 0 for d in [fa, rca, fb, rcb, ref]
+                   for v in d.values()):
+                continue
+            result[l] = {
+                'cross_1→2_fwd_rc':  calc_pair_cross_pk(ref, fa, rcb, k),
+                'cross_1→2_rc_fwd':  calc_pair_cross_pk(ref, rca, fb, k),
+                'cross_1→2_fwd_fwd': calc_pair_cross_pk(ref, fa, fb, k),
+                'cross_1→2_rc_rc':   calc_pair_cross_pk(ref, rca, rcb, k),
+                'cross_2→1_fwd_rc':  calc_pair_cross_pk(ref, fb, rca, k),
+                'cross_2→1_rc_fwd':  calc_pair_cross_pk(ref, rcb, fa, k),
+                'cross_2→1_fwd_fwd': calc_pair_cross_pk(ref, fb, fa, k),
+                'cross_2→1_rc_rc':   calc_pair_cross_pk(ref, rcb, rca, k),
+                'pk_fwd_1_in_2':     calc_pk_with_other(ref, fa, fb, k),
+                'pk_rc_1_in_2':      calc_pk_with_other(ref, rca, rcb, k),
+                'pk_fwd_2_in_1':     calc_pk_with_other(ref, fb, fa, k),
+                'pk_rc_2_in_1':      calc_pk_with_other(ref, rcb, rca, k),
+            }
+        return i, result
+
+    pk_matrices = {m: defaultdict(dict) for m in PAIRWISE_METRICS}
+    with ThreadPoolExecutor() as pool:
+        futs = [pool.submit(_worker, i) for i in range(n_ref)]
+        for f in tqdm(as_completed(futs), total=n_ref,
+                      desc=f'  pairwise viralm {fwd_name_a}<> {fwd_name_b}', leave=False):
+            i, layer_results = f.result()
+            for l, metrics in layer_results.items():
+                for mname, mval in metrics.items():
+                    pk_matrices[mname][l][i] = mval
+
+    result = {}
+    for mname in PAIRWISE_METRICS:
+        if pk_matrices[mname]:
+            bl, bm, bs = _extract_best(pk_matrices[mname])
+            result[mname] = {'best_layer': bl, 'mean_pk': bm, 'std_pk': bs,
+                             'pk_matrix': dict(pk_matrices[mname])}
+    return result if result else None
+
+
+def _run_pairwise_model(model, fwd_name_a, rc_name_a, fwd_name_b, rc_name_b,
+                        n_ref, k, latent_dir):
+    if model == 'kmer':
+        return _compute_pairwise_cross_kmer(fwd_name_a, rc_name_a,
+                                            fwd_name_b, rc_name_b,
+                                            n_ref, k, latent_dir)
+    elif model == 'viralm':
+        return _compute_pairwise_cross_viralm(fwd_name_a, rc_name_a,
+                                              fwd_name_b, rc_name_b,
+                                              n_ref, k, latent_dir)
+    else:
+        return _compute_pairwise_cross_layered(model, fwd_name_a, rc_name_a,
+                                               fwd_name_b, rc_name_b,
+                                               n_ref, k, latent_dir)
+
+
+def _run_pairwise_task(packed):
+    model, fwd_na, rc_na, fwd_nb, rc_nb, n_ref, k, latent_dir = packed
+    return (fwd_na, fwd_nb, model), _run_pairwise_model(
+        model, fwd_na, rc_na, fwd_nb, rc_nb, n_ref, k, latent_dir)
+
+
+def compute_pairwise_cross_metrics(preproc_files, rc_files, models,
+                                   n_ref, k, latent_dir, metrics_dir,
+                                   max_workers=None):
+    """Pairwise cross-virus metrics for all pairs of different viruses.
+
+    Returns a list of dict rows (one per metric/model/pair) and saves Excel.
+    """
+    labels = sorted(preproc_files.keys())
+    if len(labels) < 2:
+        print("Pairwise cross: need at least 2 viruses, skipping.")
+        return []
+
+    # Build all unordered pairs
+    pairs = [(labels[i], labels[j]) for i in range(len(labels))
+             for j in range(i + 1, len(labels))]
+
+    tasks = []
+    for a, b in pairs:
+        fwd_na = preproc_files[a][1]
+        rc_na  = rc_files.get(a, (None, f'REVERSECOMPLEMENT{a}_preproc'))[1]
+        fwd_nb = preproc_files[b][1]
+        rc_nb  = rc_files.get(b, (None, f'REVERSECOMPLEMENT{b}_preproc'))[1]
+        for model in models:
+            tasks.append((model, fwd_na, rc_na, fwd_nb, rc_nb,
+                          n_ref, k, latent_dir))
+
+    rows = []
+    with ProcessPoolExecutor(max_workers=max_workers) as pool:
+        futures = {pool.submit(_run_pairwise_task, t): t for t in tasks}
+        pbar = tqdm(as_completed(futures), total=len(tasks),
+                    desc='Pairwise cross', unit='task')
+        for f in pbar:
+            (fwd_na, fwd_nb, model), result = f.result()
+            if result is None:
+                continue
+            virus_a = fwd_na.replace('_preproc', '')
+            virus_b = fwd_nb.replace('_preproc', '')
+            pair_dir = metrics_dir / model / f'pairwise_{virus_a}_vs_{virus_b}'
+            pair_dir.mkdir(parents=True, exist_ok=True)
+            for mname in PAIRWISE_METRICS:
+                if mname not in result:
+                    continue
+                r = result[mname]
+                rows.append({
+                    'virus_a': virus_a, 'virus_b': virus_b,
+                    'model': model, 'metric': mname,
+                    'best_layer': r['best_layer'],
+                    'mean_P@K': round(r['mean_pk'], 4),
+                    'std_P@K': round(r['std_pk'], 4),
+                })
+                # Сохраняем подробную матрицу: слои × сэмплы
+                if 'pk_matrix' in r:
+                    _save_pk_matrix(r['pk_matrix'],
+                                    pair_dir / f'{mname}_matrix.xlsx')
+                elif 'pk_by_sample' in r:
+                    matrix = {'-': {i: v for i, v in enumerate(r['pk_by_sample'])}}
+                    _save_pk_matrix(matrix,
+                                    pair_dir / f'{mname}_matrix.xlsx')
+
+    if rows:
+        df = pd.DataFrame(rows)
+        out = metrics_dir / 'pairwise_cross_viruses.xlsx'
+        df.to_excel(out, index=False)
+        print(f"Pairwise cross summary saved → {out}")
+
+    return rows
+
+
+def print_pairwise_summary(rows):
+    """Print pairwise cross-virus results as a readable table."""
+    if not rows:
+        print("No pairwise cross results.")
+        return
+    df = pd.DataFrame(rows)
+    print(f"\n{'=' * 80}")
+    print("  PAIRWISE CROSS-VIRUS METRICS")
+    print(f"{'=' * 80}")
+    for (va, vb), grp in df.groupby(['virus_a', 'virus_b']):
+        print(f"\n  Pair: {va}  <->  {vb}")
+        print(f"  {'Model':<12} {'Metric':<22} {'Layer':>8}   mean +/- std")
+        print(f"  {'-' * 60}")
+        for _, row in grp.iterrows():
+            print(f"  {row['model']:<12} {row['metric']:<22} "
+                  f"{str(row['best_layer']):>8}   "
+                  f"{row['mean_P@K']:.4f} +/- {row['std_P@K']:.4f}")
+    print()
 
 # ─────────────────────────── ОРКЕСТРАТОРЫ ─────────────────────────────────────
 
