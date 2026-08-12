@@ -16,29 +16,37 @@ compute_cross_virus.py — попарный cross-virus P@K между НОВЫ�
   - ThreadPoolExecutor: разные референсные сэмплы
 
 Использование:
-    # Из run_pipeline_dev.py:
+    # Как модуль:
     from utils.compute_cross_virus import compute_cross_virus_all
     results = compute_cross_virus_all(preproc_files, rc_files, models, ...)
 
-    # Standalone:
+    # Standalone (запускать из корня репозитория):
     python utils/compute_cross_virus.py --latent_dir data/latent_dim \
         --metrics_dir data/metrics \
         --names Egovirales_preproc Mriyavirales_preproc \
         --models kmer dnabert2 genalm
+
+Результат: data/metrics/cross_virus/{Fwd_vs_Fwd,Fwd_vs_RC,RC_vs_Fwd,RC_vs_RC}/
+           <model>/P@{k}_matrix_<query>_vs_<target>.xlsx  +  summary_cross_virus.xlsx
 """
 
 import argparse
-import pickle
+import sys
 from collections import defaultdict
 from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor, as_completed
-from itertools import combinations, product
+from itertools import combinations
 from pathlib import Path
 
 import numpy as np
 import pandas as pd
 from tqdm import tqdm
 
-from utils.compute_metrics import (calc_cross_virus_pk, _safe_pickle_load,
+# Позволяет запускать файл и как модуль (python -m / import), и как скрипт
+# (python utils/compute_cross_virus.py) — во втором случае корень репозитория
+# сам по себе в sys.path не попадает.
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
+from utils.compute_metrics import (calc_pair_cross_pk, _safe_pickle_load,
                                    _save_pk_matrix, _extract_best, viralm_get)
 
 # ─────────────────────────── КОНФИГУРАЦИЯ ────────────────────────────────────
@@ -76,7 +84,7 @@ def _compute_cross_virus_kmer(query_name: str, target_name: str,
         ref = _safe_pickle_load(ref_dir / f'sample_{i}.pickle')
         if ref is None:
             return i, None
-        return i, calc_cross_virus_pk(ref, virus_query, virus_target, k=k)
+        return i, calc_pair_cross_pk(ref, virus_query, virus_target, k=k)
 
     pk_by_sample = [None] * n_ref
     with ThreadPoolExecutor() as pool:
@@ -116,7 +124,7 @@ def _compute_cross_virus_layered(model_key: str, query_name: str, target_name: s
                 continue
             if len(ref[l]) == 0 or len(vq) == 0 or len(vt) == 0:
                 continue
-            result[l] = calc_cross_virus_pk(ref[l], vq, vt, k=k)
+            result[l] = calc_pair_cross_pk(ref[l], vq, vt, k=k)
         return i, result
 
     pk_matrix = defaultdict(dict)
@@ -157,7 +165,7 @@ def _compute_cross_virus_viralm(query_name: str, target_name: str,
             data = _safe_pickle_load(ref_dir / f'sample_{i}_layer_{l}.pkl')
             if data is None:
                 continue
-            result[l] = calc_cross_virus_pk(viralm_get(data),
+            result[l] = calc_pair_cross_pk(viralm_get(data),
                                             query_by_layer[l],
                                             target_by_layer[l], k=k)
         return i, result
@@ -236,9 +244,10 @@ def compute_cross_virus_all(preproc_files: dict, rc_files: dict,
         rc_b = rc_files.get(virus_b, (None, None))[1]
 
         for model in models:
-            if rc_a and fwd_b:
+            # A → B; каждая задача требует только те цепи, которые сама использует
+            if fwd_a and fwd_b:
                 tasks.append((model, 'Fwd_vs_Fwd', fwd_a, fwd_b))
-            if rc_a and rc_b:
+            if fwd_a and rc_b:
                 tasks.append((model, 'Fwd_vs_RC', fwd_a, rc_b))
             if rc_a and fwd_b:
                 tasks.append((model, 'RC_vs_Fwd', rc_a, fwd_b))
@@ -246,9 +255,9 @@ def compute_cross_virus_all(preproc_files: dict, rc_files: dict,
                 tasks.append((model, 'RC_vs_RC', rc_a, rc_b))
 
             # Обратное направление (B → A)
-            if rc_b and fwd_a:
+            if fwd_b and fwd_a:
                 tasks.append((model, 'Fwd_vs_Fwd', fwd_b, fwd_a))
-            if rc_b and rc_a:
+            if fwd_b and rc_a:
                 tasks.append((model, 'Fwd_vs_RC', fwd_b, rc_a))
             if rc_b and fwd_a:
                 tasks.append((model, 'RC_vs_Fwd', rc_b, fwd_a))
