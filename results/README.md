@@ -16,6 +16,7 @@ figure_data/supplementary/
 figures/main/        Fig. 1-7 of the article
 figures/supplementary/
 figures/exploratory/ output of visualization/exploratory/ (not used in the article)
+statistics/          pairwise significance tests between models
 ```
 
 ---
@@ -52,6 +53,22 @@ picture behind that summary.
 `Egovirales` or `Mriyavirales`, with the `_rc` suffix for reverse-complement input. The
 4-mer baseline has no layers and so appears only in the `layerwise_kmer_*` figures as a
 single bar.
+
+## Statistical tests between models
+
+Produced by [`visualization/model_significance.py`](../visualization/model_significance.py)
+(`python visualization/model_significance.py`; reads only `data/metrics/**.xlsx`).
+
+| File | What it holds |
+|------|---------------|
+| `statistics/pairwise_model_tests.csv` | Every pair of models, for every panel of Fig. 1, 4, 5 and 6 |
+
+Every metric is computed on the same 50 reference samples for every model, so the tests
+are paired. Each model is taken at the layer shown in the figure (`layer_a`, `layer_b`).
+Columns: `mean_a`, `mean_b`, `mean_diff` (A - B), `rank_biserial_r` (matched-pairs effect
+size, positive = A higher), `p_wilcoxon` (Wilcoxon signed-rank, two-sided, primary),
+`p_ttest` (paired t-test), `p_wilcoxon_holm` (Holm correction over the 10 pairs of one
+panel) and `signif` (`***` < 0.001, `**` < 0.01, `*` < 0.05, `ns`).
 
 ## Conventions
 

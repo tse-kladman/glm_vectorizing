@@ -3,6 +3,7 @@ numpy
 pandas
 matplotlib
 openpyxl          # pandas needs it to read the .xlsx metric tables
+scipy             # visualization/model_significance.py (paired tests between models)
 jupyterlab
 
 # Computing the metrics (run_pipeline.py, utils/, visualization/kmer_sweep.py)
