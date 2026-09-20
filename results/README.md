@@ -61,9 +61,20 @@ Produced by [`visualization/model_significance.py`](../visualization/model_signi
 (`python visualization/model_significance.py`; reads only `data/metrics/**.xlsx`).
 
 Every metric is computed on the same 50 reference samples for every model, so the tests
-are paired. Each model is taken at the layer shown in the figure (`layer_a`, `layer_b`),
-and every pair of models is compared with the Wilcoxon signed-rank test (primary,
-two-sided) and the paired t-test.
+are paired. Every pair of models is compared with the Wilcoxon signed-rank test
+(primary, two-sided) and the paired t-test.
+
+The layer each model is taken at is itself chosen from the data, so the tables carry
+three selection rules in the `selection` column:
+
+| `selection` | Layer chosen on | Reported on | Role |
+|-------------|-----------------|-------------|------|
+| `split` | even samples | odd samples (n = 25) | **primary**; every figure uses it |
+| `in_sample` | all 50 | all 50 (n = 50) | reproduces the published figures |
+| `oracle` | odd samples | odd samples (n = 25) | diagnostic: same scored samples as `split`, so the gap between them *is* the selection optimism |
+
+Measured on the current tables, that optimism is negligible: median 0, at most +0.011,
+and the chosen layer differs from the held-out choice in under 10% of cases.
 
 | File | What it holds |
 |------|---------------|
@@ -80,6 +91,9 @@ multiple-testing corrections of the Wilcoxon p-value:
 | `p_holm_all` | all 270 distinct comparisons | FWER of the whole study (most conservative) |
 | `p_bh_all` | all 270 distinct comparisons | FDR; `signif` and every figure annotation use this one |
 
+The three selection rules are alternative analyses of one dataset rather than extra
+hypotheses, so each is corrected within itself.
+
 Fig. 4 and the `k = 5` panels of Fig. 6 are built from the same metric tables; those 20
 duplicated comparisons are counted once by the study-wide corrections (`source` and
 `comparison` identify them).
@@ -92,6 +106,7 @@ duplicated comparisons are counted once by the study-wide corrections (`source` 
 | `figures/statistics/paired_fig{1,4,5}` | the 50 *paired* differences against the best model of each panel -- the quantity the test ranks |
 | `figures/statistics/heatmap_fig{1,4,5}` | every pair: mean difference (colour) and BH-adjusted significance |
 | `figures/statistics/pvalue_overview` | all comparisons, raw vs BH-adjusted p, with the exact-Wilcoxon floor 2/2^50 |
+| `figures/statistics/selection_effect` | how much choosing the layer on the scored samples inflates the result |
 
 Because the only source of randomness is the choice of reference sample, these p-values
 say that a ranking is stable across reference sets -- not that it would hold for other
