@@ -28,12 +28,14 @@ visualization/
     main_figures.ipynb     Fig. 1-7 of the main text
     supplementary_figures.ipynb   per-model, per-layer supplementary figures
     kmer_sweep.py          k-mer word-length sweep (source of the Fig. 3 numbers)
+    model_significance.py  paired tests between models + box plots and heat maps
     exploratory/           original exploratory notebooks, superseded (see its README)
 
 results/                   OUTPUTS ONLY - everything the notebooks produce
     figure_data/           the exact numbers plotted in every figure (CSV, committed)
     figures/main/          main-text figures      (PNG + PDF)
     figures/supplementary/ supplementary figures  (PNG + PDF)
+    figures/statistics/    model-comparison figures (PNG + PDF)
     figures/exploratory/   figures from the exploratory notebooks
 ```
 
