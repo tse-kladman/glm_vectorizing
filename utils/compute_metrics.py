@@ -20,6 +20,7 @@ import pickle
 import sys
 from collections import defaultdict
 from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor, as_completed
+from dataclasses import dataclass
 from pathlib import Path
 
 import numpy as np
@@ -28,23 +29,151 @@ from sklearn.neighbors import NearestNeighbors
 from sklearn.preprocessing import StandardScaler
 from tqdm import tqdm
 
+# ─────────────────────────── ПРОТОКОЛЫ ───────────────────────────────────────
+#
+# Метрика неотделима от преобразования вектора: JS и Хеллингер определены только
+# для распределений, поэтому StandardScaler для них применять нельзя.  Единицей
+# расчёта поэтому служит протокол = (преобразование, метрика).
+#
+#   P0  стандартизация + косинус  — исторический протокол всех текущих таблиц
+#   P1  без преобразования + косинус — контроль: отделяет эффект масштабирования
+#   P2  стандартизация + евклид
+#   P3  без преобразования + евклид
+#   P4  sqrt + евклид             = расстояние Хеллингера   (только распределения)
+#   P5  без преобразования + sqrt(JSD) = Jensen-Shannon      (только распределения)
+
+@dataclass(frozen=True)
+class Protocol:
+    name: str
+    transform: str      # 'standardize' | 'none' | 'sqrt'
+    metric: str         # 'cosine' | 'euclidean' | 'jensenshannon'
+    compositional: bool  # требует, чтобы вектор был распределением
+    label: str
+
+
+PROTOCOLS = {p.name: p for p in [
+    Protocol('P0', 'standardize', 'cosine',        False, 'standardize + cosine'),
+    Protocol('P1', 'none',        'cosine',        False, 'raw + cosine'),
+    Protocol('P2', 'standardize', 'euclidean',     False, 'standardize + euclidean'),
+    Protocol('P3', 'none',        'euclidean',     False, 'raw + euclidean'),
+    Protocol('P4', 'sqrt',        'euclidean',     True,  'Hellinger'),
+    Protocol('P5', 'none',        'jensenshannon', True,  'Jensen-Shannon'),
+]}
+
+DEFAULT_PROTOCOL = PROTOCOLS['P0']
+
+# Блок памяти для векторного расчёта JS (байты на промежуточный тензор).
+_JS_BLOCK_BYTES = 128 << 20
+
+
+def _as_protocol(protocol) -> Protocol:
+    if protocol is None:
+        return DEFAULT_PROTOCOL
+    return protocol if isinstance(protocol, Protocol) else PROTOCOLS[str(protocol)]
+
+
+def _check_distribution(X: np.ndarray, protocol: Protocol):
+    """Протоколы P4/P5 осмысленны только для неотрицательных векторов-распределений."""
+    if X.size and X.min() < -1e-9:
+        raise ValueError(f'{protocol.name} ({protocol.label}) требует неотрицательных '
+                         f'векторов, найдено {X.min():.4g}')
+
+
+def _apply_transform(X: np.ndarray, protocol: Protocol) -> np.ndarray:
+    if protocol.transform == 'standardize':
+        return StandardScaler().fit_transform(X)
+    if protocol.transform == 'sqrt':
+        _check_distribution(X, protocol)
+        return np.sqrt(X)
+    if protocol.transform == 'none':
+        if protocol.compositional:
+            _check_distribution(X, protocol)
+        return X
+    raise ValueError(f'unknown transform: {protocol.transform}')
+
+
+# ─────────────────────────── ПОИСК СОСЕДЕЙ ───────────────────────────────────
+
+def _xlog2x(X: np.ndarray) -> np.ndarray:
+    """x*log2(x) с соглашением 0*log0 = 0, без вычисления log от нуля."""
+    return X * np.log2(np.where(X > 0, X, 1.0))
+
+
+def _entropy(X: np.ndarray) -> np.ndarray:
+    """Построчная энтропия в битах (нули трактуются как 0 log 0 = 0)."""
+    return -_xlog2x(X).sum(axis=1)
+
+
+def _js_knn(query: np.ndarray, space: np.ndarray, n_neighbors: int) -> np.ndarray:
+    """Индексы n ближайших соседей по расстоянию sqrt(JSD).
+
+    JSD(P,Q) = H((P+Q)/2) - (H(P)+H(Q))/2, поэтому энтропии строк считаются один
+    раз, а попарно нужна только энтропия смеси.  Корень — монотонная функция, на
+    порядок соседей он не влияет, поэтому ранжируем прямо по JSD.
+    """
+    query = np.ascontiguousarray(query, dtype=np.float32)
+    space = np.ascontiguousarray(space, dtype=np.float32)
+    h_query, h_space = _entropy(query), _entropy(space)
+
+    n_space, dim = space.shape
+    block = max(1, int(_JS_BLOCK_BYTES / max(1, n_space * dim * 4)))
+
+    out = np.empty((len(query), n_neighbors), dtype=np.int64)
+    for start in range(0, len(query), block):
+        stop = min(start + block, len(query))
+        mixture = (query[start:stop, None, :] + space[None, :, :]) * 0.5
+        h_mixture = -_xlog2x(mixture).sum(axis=2)
+        jsd = h_mixture - 0.5 * (h_query[start:stop, None] + h_space[None, :])
+        part = np.argpartition(jsd, n_neighbors - 1, axis=1)[:, :n_neighbors]
+        order = np.take_along_axis(jsd, part, axis=1).argsort(axis=1)
+        out[start:stop] = np.take_along_axis(part, order, axis=1)
+    return out
+
+
+def _knn_indices(query: np.ndarray, space: np.ndarray, n_neighbors: int,
+                 metric: str) -> np.ndarray:
+    n_neighbors = min(n_neighbors, len(space))
+    if metric == 'jensenshannon':
+        return _js_knn(query, space, n_neighbors)
+    nn = NearestNeighbors(n_neighbors=n_neighbors, metric=metric)
+    nn.fit(space)
+    return nn.kneighbors(query, return_distance=False)
+
+
+def _prefix_precisions(neighbour_labels: np.ndarray, targets, ks) -> dict:
+    """P@k для всех k сразу: префиксы одного и того же списка соседей."""
+    targets = np.asarray(targets)
+    if targets.ndim == 0:
+        targets = np.repeat(targets, len(neighbour_labels))
+    hits = (neighbour_labels == targets[:, None]).astype(np.float64)
+    cumulative = np.cumsum(hits, axis=1)
+    got = neighbour_labels.shape[1]
+    return {k: float(np.mean(cumulative[:, min(k, got) - 1] / min(k, got))) for k in ks}
+
+
 # ─────────────────────────── БАЗОВЫЕ МЕТРИКИ ─────────────────────────────────
 
 def precision_K_new(all_emb, all_labels, new_indices, k=5, metric='cosine'):
-    nn = NearestNeighbors(n_neighbors=k + 1, metric=metric)
-    nn.fit(all_emb)
-    _, indices = nn.kneighbors(all_emb)
-    all_labels = np.array(all_labels)
-    precisions = []
-    for idx in new_indices:
-        nbrs = all_labels[indices[idx][1:]]
-        precisions.append(np.mean(nbrs == all_labels[idx]))
-    return float(np.mean(precisions)) if precisions else 0.0
+    """P@K для точек new_indices в общем пространстве all_emb (self исключается)."""
+    all_labels = np.asarray(all_labels)
+    new_indices = np.asarray(new_indices)
+    if len(new_indices) == 0:
+        return 0.0
+    # Соседи нужны только для новых точек — остальные строки не запрашиваем.
+    idx = _knn_indices(all_emb[new_indices], all_emb, k + 1, metric)[:, 1:]
+    return _prefix_precisions(all_labels[idx], all_labels[new_indices], [k])[k]
 
 
-def calc_metrics_with_new(reference: dict, virus: dict, k=5):
-    """P@K: для каждого вирусного лейбла — пространство ref + только этот лейбл."""
+def calc_metrics_with_new(reference: dict, virus: dict, k=5, protocol=None, ks=None):
+    """P@K: для каждого вирусного лейбла — пространство ref + только этот лейбл.
+
+    ``ks`` задаёт набор k, считаемых за один проход (Fig. 6); тогда возвращается
+    словарь {k: P@k}, иначе — одно число для ``k``.
+    """
+    protocol = _as_protocol(protocol)
+    wanted = sorted(ks) if ks else [k]
     per_label_pks = []
+
     for vlabel, vembs in virus.items():
         if len(vembs) == 0:
             continue
@@ -62,20 +191,30 @@ def calc_metrics_with_new(reference: dict, virus: dict, k=5):
         if not all_emb or start == 0:
             continue
 
-        all_emb = np.vstack(all_emb)
+        all_emb = _apply_transform(np.vstack(all_emb), protocol)
+        all_labels = np.asarray(all_labels)
         new_indices = np.arange(start, len(all_labels))
-        all_emb = StandardScaler().fit_transform(all_emb)
-        per_label_pks.append(precision_K_new(all_emb, all_labels, new_indices, k=k))
 
-    return float(np.mean(per_label_pks)) if per_label_pks else 0.0
+        idx = _knn_indices(all_emb[new_indices], all_emb, max(wanted) + 1,
+                           protocol.metric)[:, 1:]
+        per_label_pks.append(_prefix_precisions(all_labels[idx],
+                                                all_labels[new_indices], wanted))
+
+    if not per_label_pks:
+        return {k: 0.0 for k in wanted} if ks else 0.0
+    averaged = {k: float(np.mean([p[k] for p in per_label_pks])) for k in wanted}
+    return averaged if ks else averaged[k]
 
 
-def calc_cross_pk(reference: dict, virus_fwd: dict, virus_rc: dict, k=5):
+def calc_cross_pk(reference: dict, virus_fwd: dict, virus_rc: dict, k=5,
+                  protocol=None, ks=None):
     """Cross P@K: доля RC-соседей среди k ближайших для каждого прямого фрагмента.
 
     Пространство поиска: ref + RC (без прямых фрагментов вируса).
     Прямые фрагменты — только query.
     """
+    protocol = _as_protocol(protocol)
+    wanted = sorted(ks) if ks else [k]
     per_label_pks = []
     for vlabel, vembs in virus_fwd.items():
         if len(vembs) == 0:
@@ -102,28 +241,23 @@ def calc_cross_pk(reference: dict, virus_fwd: dict, virus_rc: dict, k=5):
         space_emb = np.vstack(space_emb)
         fwd_emb = np.vstack([vembs])
 
-        # Масштабируем совместно, затем разделяем
-        combined = np.vstack([space_emb, fwd_emb])
-        combined = StandardScaler().fit_transform(combined)
+        # Преобразуем совместно, затем разделяем
+        combined = _apply_transform(np.vstack([space_emb, fwd_emb]), protocol)
         space_scaled = combined[:len(space_labels)]
         fwd_scaled = combined[len(space_labels):]
 
-        # Ищем k соседей fwd в пространстве ref+RC (self нет → n_neighbors=k)
-        nn = NearestNeighbors(n_neighbors=k, metric='cosine')
-        nn.fit(space_scaled)
-        _, indices = nn.kneighbors(fwd_scaled)
-        space_labels_arr = np.array(space_labels)
+        # Ищем соседей fwd в пространстве ref+RC (self нет → n_neighbors=k)
+        idx = _knn_indices(fwd_scaled, space_scaled, max(wanted), protocol.metric)
+        per_label_pks.append(_prefix_precisions(np.asarray(space_labels)[idx],
+                                                rc_label, wanted))
 
-        precisions = []
-        for idx_row in indices:
-            nbrs = space_labels_arr[idx_row]
-            precisions.append(float(np.mean(nbrs == rc_label)))
-        per_label_pks.append(float(np.mean(precisions)))
-
-    return float(np.mean(per_label_pks)) if per_label_pks else 0.0
+    if not per_label_pks:
+        return {k: 0.0 for k in wanted} if ks else 0.0
+    averaged = {k: float(np.mean([p[k] for p in per_label_pks])) for k in wanted}
+    return averaged if ks else averaged[k]
 
 
-def calc_pair_cross_pk(reference, query_virus, target_virus, k=5):
+def calc_pair_cross_pk(reference, query_virus, target_virus, k=5, protocol=None):
     """Cross P@K between two different viruses.
 
     Space = all reference fragments + all target_virus fragments.
@@ -154,26 +288,25 @@ def calc_pair_cross_pk(reference, query_virus, target_virus, k=5):
     space_is_target = np.array([False] * (len(space_embs) - n_target)
                                + [True] * n_target)
 
-    combined = np.vstack([space_embs, query_embs])
-    combined = StandardScaler().fit_transform(combined)
+    protocol = _as_protocol(protocol)
+    combined = _apply_transform(np.vstack([space_embs, query_embs]), protocol)
     space_scaled = combined[:len(space_embs)]
     query_scaled = combined[len(space_embs):]
 
-    nn = NearestNeighbors(n_neighbors=k, metric='cosine')
-    nn.fit(space_scaled)
-    _, indices = nn.kneighbors(query_scaled)
+    indices = _knn_indices(query_scaled, space_scaled, k, protocol.metric)
 
     precisions = space_is_target[indices].mean(axis=1)
     return float(precisions.mean())
 
 
-def calc_pk_with_other(reference, query_virus, other_virus, k=5):
+def calc_pk_with_other(reference, query_virus, other_virus, k=5, protocol=None):
     """P@K for query_virus in a space that also contains other_virus.
 
     Per-label: space = ref + all of other_virus, query = one label of query_virus.
     Measures whether query fragments still find their own label when another
     virus occupies the embedding space.
     """
+    protocol = _as_protocol(protocol)
     per_label_pks = []
     for vlabel, vembs in query_virus.items():
         if len(vembs) == 0:
@@ -199,10 +332,10 @@ def calc_pk_with_other(reference, query_virus, other_virus, k=5):
         if not all_emb or start == 0:
             continue
 
-        all_emb = np.vstack(all_emb)
+        all_emb = _apply_transform(np.vstack(all_emb), protocol)
         new_indices = np.arange(start, len(all_labels))
-        all_emb = StandardScaler().fit_transform(all_emb)
-        per_label_pks.append(precision_K_new(all_emb, all_labels, new_indices, k=k))
+        per_label_pks.append(precision_K_new(all_emb, all_labels, new_indices,
+                                             k=k, metric=protocol.metric))
 
     return float(np.mean(per_label_pks)) if per_label_pks else 0.0
 

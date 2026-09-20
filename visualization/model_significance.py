@@ -52,28 +52,56 @@ PLOTTED = {
 
 
 # --------------------------------------------------------------------------- #
-#  Loading: one 50-long vector per model, taken at the figure's best layer.     #
+#  Selecting the layer.                                                         #
+#                                                                               #
+#  The layer shown in a figure is the one with the highest mean, chosen on the   #
+#  same 50 samples the result is then reported on -- which biases that result    #
+#  upwards.  ``split`` fixes this: even-numbered samples choose the layer, odd-  #
+#  numbered ones are used for every reported number and every test.  ``in_sample #
+#  reproduces the figures as they stand; both are written out so the size of the #
+#  selection effect stays visible.                                              #
 # --------------------------------------------------------------------------- #
-def _best_row(mat: pd.DataFrame) -> tuple[str, pd.Series]:
-    """Row (layer) with the highest mean over samples, as in the figures."""
-    means = mat.mean(axis=1, skipna=True)
-    layer = means.idxmax()
-    return str(layer), mat.loc[layer]
+SELECTIONS = ("split", "in_sample", "oracle")   # primary first
 
 
-def load_reference(model: str, metric: str):
+def _best_row(mat: pd.DataFrame, selection: str) -> tuple[str, pd.Series]:
+    """Pick the layer and return its values, under one of three selection rules.
+
+    split     choose on even samples, report on odd ones  -- primary, unbiased
+    in_sample choose and report on all 50                 -- reproduces the figures
+    oracle    choose and report on the odd samples        -- same reporting samples
+              as ``split``, so the difference between the two is the selection
+              optimism itself, uncontaminated by which half is scored
+    """
+    even = [c for c in mat.columns if c % 2 == 0]
+    odd = [c for c in mat.columns if c % 2 == 1]
+
+    if selection == "in_sample":
+        choose = report = list(mat.columns)
+    elif selection == "split":
+        choose, report = even, odd
+    elif selection == "oracle":
+        choose = report = odd
+    else:
+        raise ValueError(f"unknown selection rule: {selection}")
+
+    layer = mat[choose].mean(axis=1, skipna=True).idxmax()
+    return str(layer), mat.loc[layer, report]
+
+
+def load_reference(model: str, metric: str, selection: str):
     """Fig. 1 tables: rows = layers (0..n), columns = sample index 0..49."""
     mat = pd.read_excel(fio.DATA_METRICS / model / f"{metric}.xlsx")
     mat.columns = [int(c) for c in mat.columns]
-    layer, row = _best_row(mat)
+    layer, row = _best_row(mat, selection)
     return ("-" if model == "kmer" else layer), row
 
 
-def load_pk_matrix(model: str, filename: str):
+def load_pk_matrix(model: str, filename: str, selection: str):
     """Pipeline tables: 'layer' column + sample_<i> columns in arbitrary order."""
     mat = pd.read_excel(fio.DATA_METRICS / model / filename).set_index("layer")
     mat.columns = [int(c.split("_")[1]) for c in mat.columns]
-    return _best_row(mat.sort_index(axis=1))
+    return _best_row(mat.sort_index(axis=1), selection)
 
 
 # --------------------------------------------------------------------------- #
@@ -87,24 +115,25 @@ def panels():
     study-wide multiple-testing correction.
     """
     for metric, label in [("ARI", "ARI"), ("P5", "Precision@5"), ("silh", "Silhouette")]:
-        yield "fig1", label, metric, lambda m, metric=metric: load_reference(m, metric)
+        yield ("fig1", label, metric,
+               lambda m, s, metric=metric: load_reference(m, metric, s))
 
     for name, label in [("Egovirales_preproc", "P@5 Egovirales"),
                         ("Mriyavirales_preproc", "P@5 Mriyavirales"),
                         ("REVERSECOMPLEMENTEgovirales_preproc", "P@5 Egovirales (RC)"),
                         ("REVERSECOMPLEMENTMriyavirales_preproc", "P@5 Mriyavirales (RC)")]:
         f = f"P@5_matrix_{name}.xlsx"
-        yield "fig4", label, f, lambda m, f=f: load_pk_matrix(m, f)
+        yield "fig4", label, f, lambda m, s, f=f: load_pk_matrix(m, f, s)
 
     for name, label in [("Egovirales_preproc", "CROSS P@5 Egovirales"),
                         ("Mriyavirales_preproc", "CROSS P@5 Mriyavirales")]:
         f = f"cross_P@5_matrix_{name}.xlsx"
-        yield "fig5", label, f, lambda m, f=f: load_pk_matrix(m, f)
+        yield "fig5", label, f, lambda m, s, f=f: load_pk_matrix(m, f, s)
 
     for virus in ["Egovirales", "Mriyavirales"]:
         for k in range(1, 11):
             f = f"P@{k}_matrix_{virus}_preproc.xlsx"
-            yield "fig6", f"P@{k} {virus}", f, lambda m, f=f: load_pk_matrix(m, f)
+            yield "fig6", f"P@{k} {virus}", f, lambda m, s, f=f: load_pk_matrix(m, f, s)
 
 
 # --------------------------------------------------------------------------- #
@@ -145,16 +174,18 @@ def stars(p: float) -> str:
 # --------------------------------------------------------------------------- #
 #  Stage 1 -- per-sample values and the tests built from them.                  #
 # --------------------------------------------------------------------------- #
-def extract():
+def _extract_one(selection: str):
+    """All panels for one selection rule ("split" or "in_sample")."""
     samples, tests = [], []
 
     for figure, panel, source, loader in panels():
-        data = {m: loader(m) for m in MODELS}
+        data = {m: loader(m, selection) for m in MODELS}
 
         for model, (layer, values) in data.items():
             for sample, value in values.items():
-                samples.append({"figure": figure, "panel": panel, "model": model,
-                                "layer": layer, "sample": int(sample), "value": float(value)})
+                samples.append({"selection": selection, "figure": figure, "panel": panel,
+                                "model": model, "layer": layer,
+                                "sample": int(sample), "value": float(value)})
 
         rows = []
         for a, b in combinations(MODELS, 2):
@@ -162,6 +193,7 @@ def extract():
             pair = pd.concat([xa, xb], axis=1, keys=["a", "b"]).dropna()
             d = (pair["a"] - pair["b"]).to_numpy()
             rows.append({
+                "selection": selection,
                 "figure": figure, "panel": panel, "source": source,
                 "model_a": a, "layer_a": la, "model_b": b, "layer_b": lb,
                 "n": len(d),
@@ -180,7 +212,9 @@ def extract():
 
     # Study-wide corrections.  Fig. 4 and the k = 5 panels of Fig. 6 test the same
     # tables, so the family is the set of *distinct* comparisons; a duplicated
-    # comparison then simply carries the adjusted p-value of its twin.
+    # comparison then simply carries the adjusted p-value of its twin.  The two
+    # selection rules are alternative analyses of one dataset, not extra
+    # hypotheses, so each is corrected within itself.
     tests["comparison"] = tests["source"] + "|" + tests["model_a"] + "|" + tests["model_b"]
     unique = tests.drop_duplicates("comparison").set_index("comparison")
     p = unique["p_wilcoxon"].to_numpy()
@@ -188,11 +222,18 @@ def extract():
                             index=unique.index)
     tests = tests.join(adjusted, on="comparison")
     tests["signif"] = tests["p_bh_all"].map(stars)
-    print(f"  family   =  {len(unique)} distinct comparisons "
-          f"({len(tests) - len(unique)} duplicated between Fig. 4 and Fig. 6)")
+    print(f"  {selection:<10} n={tests['n'].max()} per comparison, "
+          f"{len(unique)} distinct comparisons, "
+          f"{(adjusted['p_bh_all'] >= 0.05).sum()} not significant after FDR")
+    return pd.DataFrame(samples), tests
+
+
+def extract():
+    frames = [_extract_one(selection) for selection in SELECTIONS]
+    samples = pd.concat([f[0] for f in frames], ignore_index=True)
+    tests = pd.concat([f[1] for f in frames], ignore_index=True)
 
     FIG_DATA.mkdir(parents=True, exist_ok=True)
-    samples = pd.DataFrame(samples)
     samples.to_csv(FIG_DATA / "panel_samples.csv", index=False, float_format="%.6g")
     tests.to_csv(FIG_DATA / "pairwise_model_tests.csv", index=False, float_format="%.6g")
     print(f"  samples  ->  {(FIG_DATA / 'panel_samples.csv').relative_to(fio.ROOT).as_posix()}"
@@ -384,13 +425,66 @@ def plot_pvalue_overview(tests: pd.DataFrame):
     plt.close(fig)
 
 
+def plot_selection_effect(tests: pd.DataFrame):
+    """Selection optimism: 'oracle' and 'split' score the SAME samples (the odd half).
+
+    They differ only in where the layer was chosen -- on those same samples, or on
+    the held-out even half -- so their gap isolates the bias of choosing the layer
+    on the data it is then reported on.
+    """
+    keys = ["figure", "panel", "model_a", "model_b"]
+    merged = (tests[tests["selection"] == "oracle"]
+              .merge(tests[tests["selection"] == "split"], on=keys,
+                     suffixes=("_oracle", "_split")))
+
+    # one row per (panel, model): both models of each pair contribute
+    scores = pd.concat([
+        merged[["layer_a_oracle", "layer_a_split", "mean_a_oracle", "mean_a_split"]]
+        .set_axis(["layer_o", "layer_s", "mean_o", "mean_s"], axis=1),
+        merged[["layer_b_oracle", "layer_b_split", "mean_b_oracle", "mean_b_split"]]
+        .set_axis(["layer_o", "layer_s", "mean_o", "mean_s"], axis=1),
+    ], ignore_index=True).drop_duplicates()
+
+    gap = scores["mean_o"] - scores["mean_s"]
+    changed = scores["layer_o"].astype(str) != scores["layer_s"].astype(str)
+
+    fig, axes = plt.subplots(1, 2, figsize=(11, 4.6))
+    axes[0].scatter(scores["mean_o"], scores["mean_s"], s=16, alpha=0.6, color="#0072B2")
+    lims = [min(scores["mean_o"].min(), scores["mean_s"].min()) - 0.02,
+            max(scores["mean_o"].max(), scores["mean_s"].max()) + 0.02]
+    axes[0].plot(lims, lims, color="0.6", lw=1)
+    axes[0].set_xlim(lims); axes[0].set_ylim(lims)
+    axes[0].set_xlabel("layer chosen on the scored samples")
+    axes[0].set_ylabel("layer chosen on the held-out half")
+    axes[0].set_title("Same samples scored, different layer choice")
+
+    axes[1].hist(gap, bins=30, color="#009E73", edgecolor="black", linewidth=0.4)
+    axes[1].axvline(0, color="crimson", ls="--", lw=1.2)
+    axes[1].set_xlabel("optimism: oracle score  -  split-sample score")
+    axes[1].set_ylabel("model x panel")
+    axes[1].set_title(f"median optimism {gap.median():+.4f}; "
+                      f"layer differs in {changed.mean() * 100:.0f}% of cases")
+
+    fig.suptitle("Bias from choosing the layer on the samples it is scored on",
+                 fontsize=13)
+    fig.tight_layout(rect=(0, 0, 1, 0.93))
+    save_figure(fig, "selection_effect", kind="statistics")
+    plt.close(fig)
+
+
 def main():
     fio.set_style()
     samples, tests = extract()
-    plot_boxes(samples, tests)
-    plot_paired_diffs(samples, tests)
-    plot_heatmaps(tests)
-    plot_pvalue_overview(tests)
+
+    # Figures show the primary analysis: layer chosen on held-out samples.
+    primary_samples = samples[samples["selection"] == "split"]
+    primary_tests = tests[tests["selection"] == "split"]
+
+    plot_boxes(primary_samples, primary_tests)
+    plot_paired_diffs(primary_samples, primary_tests)
+    plot_heatmaps(primary_tests)
+    plot_pvalue_overview(primary_tests)
+    plot_selection_effect(tests)
     return samples, tests
 
 
