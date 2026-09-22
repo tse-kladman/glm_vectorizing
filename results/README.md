@@ -102,7 +102,7 @@ duplicated comparisons are counted once by the study-wide corrections (`source` 
 
 | Figure | What it shows |
 |--------|---------------|
-| `figures/statistics/box_fig{1,4,5}` | distribution of each model over the 50 reference samples, one box per model |
+| `figures/statistics/box_fig{1,4,5}` | distribution of each model over the reference samples, one box per model, sorted by mean and annotated with significance brackets (neighbouring pairs, plus every pair that comes out *not* significant) |
 | `figures/statistics/paired_fig{1,4,5}` | the 50 *paired* differences against the best model of each panel -- the quantity the test ranks |
 | `figures/statistics/heatmap_fig{1,4,5}` | every pair: mean difference (colour) and BH-adjusted significance |
 | `figures/statistics/pvalue_overview` | all comparisons, raw vs BH-adjusted p, with the exact-Wilcoxon floor 2/2^50 |

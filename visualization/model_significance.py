@@ -246,6 +246,57 @@ def extract():
 # --------------------------------------------------------------------------- #
 #  Stage 2 -- figures.                                                          #
 # --------------------------------------------------------------------------- #
+def _significance_pairs(panel_tests: pd.DataFrame, order: list) -> list:
+    """Which comparisons to draw as brackets, and on which level.
+
+    With five models a panel holds ten comparisons; drawing all of them buries the
+    figure.  Sorted by mean, a bracket between neighbours implies every wider pair,
+    so neighbours carry the information -- except for pairs that come out *not*
+    significant, which are the interesting ones and are always drawn.
+    """
+    rank = {model: i for i, model in enumerate(order)}
+    chosen = []
+    for _, row in panel_tests.iterrows():
+        i, j = sorted((rank[row["model_a"]], rank[row["model_b"]]))
+        label = stars(row["p_bh_all"])
+        if j - i == 1 or label == "ns":
+            chosen.append({"i": i, "j": j, "label": label, "span": j - i})
+
+    # Greedy level assignment: narrow brackets first, each on the lowest free level.
+    chosen.sort(key=lambda c: (c["span"], c["i"]))
+    occupied = []                      # per level: list of (i, j) already drawn
+    for bracket in chosen:
+        for level, spans in enumerate(occupied):
+            if all(bracket["j"] <= i or bracket["i"] >= j for i, j in spans):
+                spans.append((bracket["i"], bracket["j"]))
+                bracket["level"] = level
+                break
+        else:
+            occupied.append([(bracket["i"], bracket["j"])])
+            bracket["level"] = len(occupied) - 1
+    return chosen
+
+
+def _draw_brackets(ax, brackets: list, top: float, step: float):
+    """Draw significance brackets above the data, starting at ``top``."""
+    for bracket in brackets:
+        y = top + step * (bracket["level"] + 1)
+        # Inset the ends so that brackets over neighbouring boxes stay visibly
+        # separate instead of merging into one continuous line.
+        x_left, x_right = bracket["i"] + 1.16, bracket["j"] + 0.84
+        ax.plot([x_left, x_left, x_right, x_right],
+                [y - step * 0.3, y, y, y - step * 0.3],
+                lw=1.0, color="0.35", clip_on=False, zorder=5)
+        significant = bracket["label"] != "ns"
+        ax.text((x_left + x_right) / 2, y + step * 0.04, bracket["label"],
+                ha="center", va="bottom", zorder=5,
+                fontsize=11 if significant else 8.5,
+                color="black" if significant else "0.45")
+    if brackets:
+        levels = max(b["level"] for b in brackets) + 1
+        ax.set_ylim(top=top + step * (levels + 0.9))
+
+
 def _grid(n_panels: int, ncols: int, panel_size=(4.2, 4.0)):
     nrows = int(np.ceil(n_panels / ncols))
     fig, axes = plt.subplots(nrows, ncols,
@@ -267,32 +318,41 @@ def plot_boxes(samples: pd.DataFrame, tests: pd.DataFrame):
 
         for ax, panel in zip(axes, panel_names):
             sub = samples[(samples["figure"] == figure) & (samples["panel"] == panel)]
-            values = [sub[sub["model"] == m]["value"].to_numpy() for m in MODELS]
+            # Sorted by mean, so significance brackets form a ladder instead of a web.
+            order = (sub.groupby("model")["value"].mean()
+                     .sort_values(ascending=False).index.tolist())
+            values = [sub[sub["model"] == m]["value"].to_numpy() for m in order]
 
             bp = ax.boxplot(values, widths=0.6, patch_artist=True, showfliers=False,
                             medianprops=dict(color="black", lw=1.6))
-            for patch, model in zip(bp["boxes"], MODELS):
+            for patch, model in zip(bp["boxes"], order):
                 patch.set_facecolor(MODEL_COLOR[model])
                 patch.set_alpha(0.55)
                 patch.set_edgecolor("black")
                 patch.set_linewidth(0.6)
 
-            # the 50 paired observations behind each box
-            for pos, (vals, model) in enumerate(zip(values, MODELS), start=1):
+            # the paired observations behind each box
+            for pos, (vals, model) in enumerate(zip(values, order), start=1):
                 jitter = rng.uniform(-0.13, 0.13, len(vals))
                 ax.plot(pos + jitter, vals, "o", ms=2.4, mew=0,
                         color=MODEL_COLOR[model], alpha=0.65, zorder=3)
 
-            layers = {m: sub[sub["model"] == m]["layer"].iloc[0] for m in MODELS}
-            ax.set_xticks(range(1, len(MODELS) + 1))
+            layers = {m: sub[sub["model"] == m]["layer"].iloc[0] for m in order}
+            ax.set_xticks(range(1, len(order) + 1))
             ax.set_xticklabels([DISPLAY[m] if str(layers[m]) == "-" else
-                                f"{DISPLAY[m]}\n(L{layers[m]})" for m in MODELS],
+                                f"{DISPLAY[m]}\n(L{layers[m]})" for m in order],
                                fontsize=9, rotation=45, ha="right")
             ax.set_title(panel, fontsize=12)
             ax.set_ylabel("Score per reference sample")
 
-        fig.suptitle(f"{title}\ndistribution over the 50 paired reference samples",
-                     fontsize=14, y=1.02)
+            panel_tests = tests[(tests["figure"] == figure) & (tests["panel"] == panel)]
+            spread = max(np.concatenate(values)) - min(np.concatenate(values))
+            _draw_brackets(ax, _significance_pairs(panel_tests, order),
+                           top=max(np.concatenate(values)) + spread * 0.04,
+                           step=spread * 0.11)
+
+        fig.suptitle(f"{title}\ndistribution over the paired reference samples "
+                     f"(brackets: BH-adjusted significance)", fontsize=14, y=1.02)
         fig.tight_layout()
         save_figure(fig, f"box_{figure}", kind="statistics")
         plt.close(fig)
@@ -410,7 +470,9 @@ def plot_pvalue_overview(tests: pd.DataFrame):
     ax.plot(lims, lims, "-", color="0.6", lw=1, zorder=0)
     ax.axhline(0.05, ls="--", color="crimson", lw=1)
     ax.axvline(floor, ls=":", color="0.4", lw=1)
-    ax.text(floor * 1.4, 1e-12, "exact Wilcoxon floor\n$2/2^{50}$", fontsize=8, color="0.3")
+    ax.text(floor * 1.4, lims[0] * 6,
+            f"exact Wilcoxon floor\n$2/2^{{{tests['n'].max()}}}$ = {floor:.1g}",
+            fontsize=8, color="0.3")
     ax.text(lims[0] * 1.5, 0.065, "0.05", fontsize=8, color="crimson")
     ax.set_xscale("log"); ax.set_yscale("log")
     ax.set_xlim(lims); ax.set_ylim(lims)
