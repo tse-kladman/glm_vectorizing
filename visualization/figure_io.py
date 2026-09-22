@@ -40,6 +40,9 @@ RESULTS = ROOT / "results"                    # everything produced by the noteb
 FIG_DATA = RESULTS / "figure_data"            # committed numbers behind each figure
 FIG_MAIN = RESULTS / "figures" / "main"       # main-text figures (fig1..fig7)
 FIG_SUPP = RESULTS / "figures" / "supplementary"
+FIG_STATS = RESULTS / "figures" / "statistics"   # significance tests between models
+
+FIGURE_DIRS = {"main": FIG_MAIN, "supplementary": FIG_SUPP, "statistics": FIG_STATS}
 
 for _folder in (FIG_DATA, FIG_MAIN, FIG_SUPP):
     _folder.mkdir(parents=True, exist_ok=True)
@@ -114,9 +117,10 @@ def load_table(name: str, **read_csv_kwargs) -> pd.DataFrame:
 def save_figure(fig, name: str, *, kind: str = "main", formats=("png", "pdf")) -> None:
     """Save a figure as PNG (final raster) and PDF (vector) under results/figures/<kind>/.
 
-    kind : "main" for main-text figures, "supplementary" for the rest.
+    kind : "main" for main-text figures, "supplementary" for the per-layer ones,
+           "statistics" for the significance figures.
     """
-    out = FIG_MAIN if kind == "main" else FIG_SUPP
+    out = FIGURE_DIRS.get(kind, FIG_SUPP)
     out.mkdir(parents=True, exist_ok=True)
     for ext in formats:
         fig.savefig(out / f"{name}.{ext}")
