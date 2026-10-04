@@ -37,11 +37,13 @@ Like the figure notebooks, the script has two stages:
     python visualization/metric_axis_figures.py --plot_only            # restyle only
     python visualization/metric_axis_figures.py --extra_protocols P1 P2 P3 P4 P5
 
-Layer choice follows the rest of the repository: the bar and line figures take each
-model at the layer with the highest mean over all 50 samples (as the published
-figures do); the box plots and tests use the split-sample rule of
-model_significance.py (layer chosen on even samples, scored on odd ones).  The 4-mer
-has no layers, so for it both rules coincide.
+Layer choice follows the rest of the repository: every language model is reported at
+the layer its own reference benchmark (<model>/P5.xlsx) picks, never at the layer that
+scores best on the unseen orders themselves.  The bar and line figures report that
+layer on all 50 samples; the box plots and tests use the stricter reference_split
+rule of model_significance.py (layer chosen on even reference samples, scored on odd
+ones).  The k-mer and MinHash baselines have no layers, so for them only the
+reported samples differ.
 """
 
 import argparse
@@ -57,8 +59,9 @@ from scipy import stats
 
 import figure_io as fio
 from figure_io import MODELS, DISPLAY, MODEL_COLOR, save_figure
-from model_significance import (_best_row, _draw_brackets, _grid, _significance_pairs,
-                                benjamini_hochberg, holm, rank_biserial, stars)
+from model_significance import (REFERENCE_METRIC, _best_row, _draw_brackets, _grid,
+                                _significance_pairs, benjamini_hochberg, holm,
+                                rank_biserial, stars)
 
 FIG_DATA_NAME = "metric_axis"
 FIG_DATA = fio.FIG_DATA / FIG_DATA_NAME
@@ -199,22 +202,43 @@ def panels():
             yield "fig6", f"P@{k} {label}", f"P@{k}_matrix_{name}.xlsx"
 
 
+def load_benchmark(metrics_dir: Path, model: str) -> pd.DataFrame | None:
+    """Reference-benchmark table that picks the layer; None for layer-less baselines."""
+    if model.startswith(("kmer", "minhash")):
+        return None
+    path = Path(metrics_dir) / model / f"{REFERENCE_METRIC}.xlsx"
+    if not path.exists():
+        raise SystemExit(f"ERROR: {path} not found -- the reference benchmark that "
+                         f"picks the layer of {model}; run run_pipeline.py first.")
+    mat = pd.read_excel(path)
+    mat.columns = [int(c) for c in mat.columns]
+    return mat
+
+
+def select_row(mat: pd.DataFrame, selection: str, chooser: pd.DataFrame | None):
+    """Layer chosen on the reference set; a layer-less table has only one row to take."""
+    if chooser is not None:
+        return _best_row(mat, selection, chooser)
+    report = ([c for c in mat.columns if c % 2 == 1] if selection == "reference_split"
+              else list(mat.columns))
+    return "-", mat.iloc[0][report]
+
+
 def extract(series: pd.DataFrame, metrics_dir: Path):
-    """Per-sample values under both selection rules, summary rows and tests."""
+    """Per-sample values under both reference-chosen rules, summary rows and tests."""
     samples, summary = [], []
+    choosers = {m: load_benchmark(metrics_dir, m) for m in series["model"].unique()}
     for figure, panel, filename in panels():
         for _, s in series.iterrows():
             mat = load_matrix(matrix_path(metrics_dir, s["model"], s["protocol"], filename))
-            for selection in ("in_sample", "split"):
-                layer, values = _best_row(mat, selection)
-                if s["model"].startswith(("kmer", "minhash")):
-                    layer = "-"
+            for selection in ("reference", "reference_split"):
+                layer, values = select_row(mat, selection, choosers[s["model"]])
                 for sample, value in values.items():
                     samples.append({"selection": selection, "figure": figure, "panel": panel,
                                     "source": filename, "series": s["series"],
                                     "layer": layer, "sample": int(sample),
                                     "value": float(value)})
-                if selection == "in_sample":
+                if selection == "reference":
                     summary.append({"figure": figure, "panel": panel, "series": s["series"],
                                     "model": s["model"], "protocol": s["protocol"],
                                     "layer": layer, "mean": float(values.mean()),
@@ -264,7 +288,7 @@ def pairwise_tests(samples: pd.DataFrame, order: list) -> pd.DataFrame:
 def stage1(series: pd.DataFrame, metrics_dir: Path):
     samples, summary = extract(series, metrics_dir)
     order = series["series"].tolist()
-    split = samples[samples["selection"] == "split"]
+    split = samples[samples["selection"] == "reference_split"]
     tests = pairwise_tests(split, order)
 
     fig4 = summary[summary["figure"] == "fig4"].rename(columns={"panel": "group"})
@@ -388,7 +412,7 @@ def print_focus(tests: pd.DataFrame, series: pd.DataFrame):
         return
     table = look[["panel", "series_a", "series_b", "mean_a", "mean_b", "mean_diff",
                   "p_bh_all", "signif"]]
-    print("\nNew protocols vs the rest (split-sample, BH over the whole set):")
+    print("\nNew protocols vs the rest (reference_split, BH over the whole set):")
     print(table.to_string(index=False, float_format=lambda v: f"{v:.4g}"))
 
 
