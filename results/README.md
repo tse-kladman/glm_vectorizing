@@ -31,9 +31,9 @@ Produced by [`visualization/main_figures.ipynb`](../visualization/main_figures.i
 | `fig1_reference_benchmark` | Best layer of each model on the reference set: ARI, P@5, silhouette | `figure_data/fig1_reference_benchmark.csv` | `metric, model, best_layer, mean, std` |
 | `fig2_layerwise` | ARI and P@5 across all transformer layers | `figure_data/fig2_layerwise.csv` | `metric, model, layer, mean, std` |
 | `fig3_kmer_sweep` | k-mer baseline: ARI / P@5 / silhouette vs word length k | `figure_data/fig3_kmer_sweep.csv` | `k, P@5_mean, P@5_std, ARI_mean, ARI_std, Silhouette_mean, Silhouette_std` |
-| `fig4_newvirus_p5` | Generalisation to unseen orders: P@5, forward and reverse complement | `figure_data/fig4_newvirus_p5.csv` | `group, model, mean, std` |
-| `fig5_cross_p5` | Forward vs reverse-complement proximity: CROSS P@5 | `figure_data/fig5_cross_p5.csv` | `group, model, mean, std` |
-| `fig6_pk_vs_k` | P@k as a function of the neighbourhood size k (k = 1..10) | `figure_data/fig6_pk_vs_k.csv` | `virus, model, k, mean` |
+| `fig4_newvirus_p5` | Generalisation to unseen orders: P@5, forward and reverse complement, at the reference-chosen layer | `figure_data/fig4_newvirus_p5.csv` | `group, model, layer, mean, std` |
+| `fig5_cross_p5` | Forward vs reverse-complement proximity: CROSS P@5, at the reference-chosen layer | `figure_data/fig5_cross_p5.csv` | `group, model, layer, mean, std` |
+| `fig6_pk_vs_k` | P@k as a function of the neighbourhood size k (k = 1..10), at the reference-chosen layer | `figure_data/fig6_pk_vs_k.csv` | `virus, model, k, layer, mean` |
 | `fig7_pk_vs_cross` | Egovirales vs Mriyavirales, per layer: own-order density (P@10) vs cross-order proximity (CROSS P@10) | `figure_data/fig7_pk_vs_cross.csv` | `model, layer, p_at_10, cross_p_at_10` |
 
 Each figure exists as `figures/main/<name>.png` and `figures/main/<name>.pdf`.
@@ -69,12 +69,21 @@ three selection rules in the `selection` column:
 
 | `selection` | Layer chosen on | Reported on | Role |
 |-------------|-----------------|-------------|------|
-| `split` | even samples | odd samples (n = 25) | **primary**; every figure uses it |
-| `in_sample` | all 50 | all 50 (n = 50) | reproduces the published figures |
-| `oracle` | odd samples | odd samples (n = 25) | diagnostic: same scored samples as `split`, so the gap between them *is* the selection optimism |
+| `reference` | the model's reference benchmark (`P5.xlsx`), all 50 | all 50 (n = 50) | **primary for the unseen-order panels** (Fig. 4-6): the layer is picked on a different task and never on the numbers reported |
+| `reference_split` | reference benchmark, even samples | odd samples (n = 25) | as above, but choice and report do not even share a sample draw |
+| `split` | even samples of the same table | odd samples (n = 25) | **primary for Fig. 1**, which *is* the reference benchmark |
+| `in_sample` | all 50 of the same table | all 50 (n = 50) | reproduces the published figures |
+| `oracle` | odd samples of the same table | odd samples (n = 25) | diagnostic: same scored samples as `split`, so the gap between them *is* the selection optimism |
 
-Measured on the current tables, that optimism is negligible: median 0, at most +0.011,
-and the chosen layer differs from the held-out choice in under 10% of cases.
+Reference-chosen layers are matched to the metric tables **by position**, not by value:
+ViraLM numbers its layers 0..11 in the benchmark table and 1..12 in the P@K matrices, so
+looking the layer up by its number would silently shift it by one.
+
+Two things this rule shows. Choosing the layer on the panel itself inflates the score only
+slightly (`oracle` vs `split`: median 0, at most +0.011), but it changes *which layer wins*
+in roughly half the panels -- and for Evo2 that costs 0.19 of P@5 on Egovirales, enough to
+move it from first place to last. Fig. 1 keeps `split`, since choosing its layer from the
+benchmark it is itself measuring would be circular.
 
 | File | What it holds |
 |------|---------------|
@@ -112,11 +121,33 @@ Because the only source of randomness is the choice of reference sample, these p
 say that a ranking is stable across reference sets -- not that it would hold for other
 viruses or other training runs.
 
+## Distance protocols: alternative-metric baselines vs the models
+
+Produced by [`visualization/metric_axis_figures.py`](../visualization/metric_axis_figures.py)
+(`python visualization/metric_axis_figures.py`). Two baselines are drawn next to every
+model under the published protocol P0: the 4-mer profile under Jensen-Shannon (P5, from
+`data/metrics/P5/kmer/`) and MinHash sketches under the Jaccard index (P4, from
+`data/metrics/P4/minhash/` — build the sketches with `utils/minhash_sketch.py` first).
+`--extra_protocols` adds P1-P3 on the 4-mer profile.
+
+| Figure | What it shows | Numbers |
+|--------|---------------|---------|
+| `figures/metric_axis/fig4_newvirus_p5` | Fig. 4 with the extra baseline series | `figure_data/metric_axis/fig4_newvirus_p5.csv` |
+| `figures/metric_axis/fig5_cross_p5` | Fig. 5 with the extra baseline series | `figure_data/metric_axis/fig5_cross_p5.csv` |
+| `figures/metric_axis/fig6_pk_vs_k` | Fig. 6 with the extra baseline series (dashed) | `figure_data/metric_axis/fig6_pk_vs_k.csv` |
+| `figures/metric_axis/box_fig{4,5}` | per-sample boxes with BH-adjusted brackets (split-sample) | `figure_data/metric_axis/panel_samples.csv`, `pairwise_tests.csv` |
+
 ## Conventions
 
 * Model order, display names and colours come from `visualization/figure_io.py`
   (Okabe-Ito palette, colour-blind safe). Change them there and every figure follows.
 * `mean` / `std` are always taken across the 50 reference samples.
+* Fig. 4, 5 and 6 report each model at the layer chosen by its **reference benchmark**
+  (`data/metrics/<model>/P5.xlsx`), not at the layer that scores best on the unseen
+  order itself, so no selection happens on the reported numbers. One layer per model is
+  used across all of those panels; `figure_io.reference_layer` matches the benchmark to
+  the metric tables by position, because ViraLM numbers its layers 0..11 in one and
+  1..12 in the other.
 * `layer` is an integer, except for the layer-less 4-mer baseline, which is written as `-`
   (it appears in `fig7_pk_vs_cross.csv` and is drawn as a single star in Fig. 7).
 * All PDFs embed TrueType fonts (`pdf.fonttype = 42`), so the text stays selectable and

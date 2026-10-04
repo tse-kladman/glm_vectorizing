@@ -31,38 +31,38 @@ from tqdm import tqdm
 
 # ─────────────────────────── ПРОТОКОЛЫ ───────────────────────────────────────
 #
-# Метрика неотделима от преобразования вектора: JS и Хеллингер определены только
-# для распределений, поэтому StandardScaler для них применять нельзя.  Единицей
-# расчёта поэтому служит протокол = (преобразование, метрика).
+# Метрика неотделима от представления: JS определён только для распределений, а
+# MinHash вообще работает не с вектором частот, а со множеством k-меров.  Единицей
+# расчёта поэтому служит протокол = (преобразование, метрика, требуемое представление).
 #
-#   P0  стандартизация + косинус  — исторический протокол всех текущих таблиц
+#   P0  стандартизация + косинус     — исторический протокол всех текущих таблиц
 #   P1  без преобразования + косинус — контроль: отделяет эффект масштабирования
 #   P2  стандартизация + евклид
 #   P3  без преобразования + евклид
-#   P4  sqrt + евклид             = расстояние Хеллингера   (только распределения)
-#   P5  без преобразования + sqrt(JSD) = Jensen-Shannon      (только распределения)
+#   P4  MinHash: оценка Жаккара по скетчу      (только скетчи, см. minhash_sketch.py)
+#   P5  sqrt(JSD) = Jensen-Shannon             (только распределения)
 
 @dataclass(frozen=True)
 class Protocol:
     name: str
-    transform: str      # 'standardize' | 'none' | 'sqrt'
-    metric: str         # 'cosine' | 'euclidean' | 'jensenshannon'
-    compositional: bool  # требует, чтобы вектор был распределением
+    transform: str   # 'standardize' | 'none' | 'sqrt'
+    metric: str      # 'cosine' | 'euclidean' | 'jensenshannon' | 'minhash'
+    requires: str    # 'any' | 'distribution' | 'sketch'
     label: str
 
 
 PROTOCOLS = {p.name: p for p in [
-    Protocol('P0', 'standardize', 'cosine',        False, 'standardize + cosine'),
-    Protocol('P1', 'none',        'cosine',        False, 'raw + cosine'),
-    Protocol('P2', 'standardize', 'euclidean',     False, 'standardize + euclidean'),
-    Protocol('P3', 'none',        'euclidean',     False, 'raw + euclidean'),
-    Protocol('P4', 'sqrt',        'euclidean',     True,  'Hellinger'),
-    Protocol('P5', 'none',        'jensenshannon', True,  'Jensen-Shannon'),
+    Protocol('P0', 'standardize', 'cosine',        'any',          'standardize + cosine'),
+    Protocol('P1', 'none',        'cosine',        'any',          'raw + cosine'),
+    Protocol('P2', 'standardize', 'euclidean',     'any',          'standardize + euclidean'),
+    Protocol('P3', 'none',        'euclidean',     'any',          'raw + euclidean'),
+    Protocol('P4', 'none',        'minhash',       'sketch',       'MinHash (Jaccard)'),
+    Protocol('P5', 'none',        'jensenshannon', 'distribution', 'Jensen-Shannon'),
 ]}
 
 DEFAULT_PROTOCOL = PROTOCOLS['P0']
 
-# Блок памяти для векторного расчёта JS (байты на промежуточный тензор).
+# Блок памяти для векторных расчётов JS/MinHash (байты на промежуточный тензор).
 _JS_BLOCK_BYTES = 128 << 20
 
 
@@ -73,20 +73,41 @@ def _as_protocol(protocol) -> Protocol:
 
 
 def _check_distribution(X: np.ndarray, protocol: Protocol):
-    """Протоколы P4/P5 осмысленны только для неотрицательных векторов-распределений."""
-    if X.size and X.min() < -1e-9:
+    """P5 и sqrt-преобразование требуют вектора-распределения: x >= 0 и sum(x) = 1."""
+    if not X.size:
+        return
+    if X.min() < -1e-9:
         raise ValueError(f'{protocol.name} ({protocol.label}) требует неотрицательных '
                          f'векторов, найдено {X.min():.4g}')
+    # Нормировку достаточно проверить на выборке строк: все они из одного источника.
+    # Нулевая строка — это пустой фрагмент (не нашлось ни одного валидного k-мера);
+    # такие встречаются и раньше молча проходили, поэтому их не считаем ошибкой.
+    sums = X[::max(1, len(X) // 32)].sum(axis=1)
+    bad = sums[(np.abs(sums - 1.0) > 1e-6) & (np.abs(sums) > 1e-9)]
+    if bad.size:
+        raise ValueError(f'{protocol.name} ({protocol.label}) требует распределений '
+                         f'(sum = 1), найдена сумма {bad[0]:.4g}')
+
+
+def _check_sketch(X: np.ndarray, protocol: Protocol):
+    """P4 работает только со скетчами MinHash, а не с векторами признаков."""
+    if X.size and not np.issubdtype(X.dtype, np.integer):
+        raise ValueError(f'{protocol.name} ({protocol.label}) требует целочисленных '
+                         f'скетчей MinHash (см. utils/minhash_sketch.py), '
+                         f'получено {X.dtype}')
 
 
 def _apply_transform(X: np.ndarray, protocol: Protocol) -> np.ndarray:
+    if protocol.requires == 'sketch':
+        _check_sketch(X, protocol)
+        return X                      # скетч нельзя масштабировать: это не вектор
     if protocol.transform == 'standardize':
         return StandardScaler().fit_transform(X)
     if protocol.transform == 'sqrt':
         _check_distribution(X, protocol)
         return np.sqrt(X)
     if protocol.transform == 'none':
-        if protocol.compositional:
+        if protocol.requires == 'distribution':
             _check_distribution(X, protocol)
         return X
     raise ValueError(f'unknown transform: {protocol.transform}')
@@ -130,11 +151,38 @@ def _js_knn(query: np.ndarray, space: np.ndarray, n_neighbors: int) -> np.ndarra
     return out
 
 
+def _minhash_knn(query: np.ndarray, space: np.ndarray, n_neighbors: int) -> np.ndarray:
+    """Индексы ближайших соседей по расстоянию MinHash (1 - оценка Жаккара).
+
+    Скетч — это s независимых минимумов хэшей множества k-меров, построенных
+    minhash_sketch.py.  Для двух множеств вероятность совпадения минимума по
+    одной хэш-функции равна их коэффициенту Жаккара, поэтому доля совпавших
+    позиций скетча — несмещённая оценка J, а 1 - J задаёт ранжирование.
+    """
+    query = np.ascontiguousarray(query, dtype=np.uint64)
+    space = np.ascontiguousarray(space, dtype=np.uint64)
+
+    n_space, sketch_size = space.shape
+    block = max(1, int(_JS_BLOCK_BYTES / max(1, n_space * sketch_size)))
+
+    out = np.empty((len(query), n_neighbors), dtype=np.int64)
+    for start in range(0, len(query), block):
+        stop = min(start + block, len(query))
+        agree = (query[start:stop, None, :] == space[None, :, :]).sum(axis=2)
+        distance = 1.0 - agree / sketch_size
+        part = np.argpartition(distance, n_neighbors - 1, axis=1)[:, :n_neighbors]
+        order = np.take_along_axis(distance, part, axis=1).argsort(axis=1)
+        out[start:stop] = np.take_along_axis(part, order, axis=1)
+    return out
+
+
 def _knn_indices(query: np.ndarray, space: np.ndarray, n_neighbors: int,
                  metric: str) -> np.ndarray:
     n_neighbors = min(n_neighbors, len(space))
     if metric == 'jensenshannon':
         return _js_knn(query, space, n_neighbors)
+    if metric == 'minhash':
+        return _minhash_knn(query, space, n_neighbors)
     nn = NearestNeighbors(n_neighbors=n_neighbors, metric=metric)
     nn.fit(space)
     return nn.kneighbors(query, return_distance=False)

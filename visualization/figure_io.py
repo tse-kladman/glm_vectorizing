@@ -18,6 +18,7 @@ and the four helper functions that both stages use.
 from pathlib import Path
 
 import matplotlib as mpl
+import numpy as np
 import pandas as pd
 
 
@@ -41,8 +42,10 @@ FIG_DATA = RESULTS / "figure_data"            # committed numbers behind each fi
 FIG_MAIN = RESULTS / "figures" / "main"       # main-text figures (fig1..fig7)
 FIG_SUPP = RESULTS / "figures" / "supplementary"
 FIG_STATS = RESULTS / "figures" / "statistics"   # significance tests between models
+FIG_METRIC = RESULTS / "figures" / "metric_axis"  # distance protocols P4/P5 vs the rest
 
-FIGURE_DIRS = {"main": FIG_MAIN, "supplementary": FIG_SUPP, "statistics": FIG_STATS}
+FIGURE_DIRS = {"main": FIG_MAIN, "supplementary": FIG_SUPP, "statistics": FIG_STATS,
+               "metric_axis": FIG_METRIC}
 
 for _folder in (FIG_DATA, FIG_MAIN, FIG_SUPP):
     _folder.mkdir(parents=True, exist_ok=True)
@@ -69,6 +72,58 @@ MODEL_COLOR = {
     "viralm": "#009E73",
     "evo2": "#D55E00",
 }
+
+
+# --------------------------------------------------------------------------- #
+#  Choosing the layer.                                                          #
+#                                                                               #
+#  Every metric on the unseen orders is reported at the layer picked by the      #
+#  model's reference benchmark, never at the layer that happens to be best on     #
+#  the unseen order itself.  The layer is then chosen on a different task and     #
+#  the reported numbers carry no selection advantage.                            #
+# --------------------------------------------------------------------------- #
+REFERENCE_METRIC = "P5"          # benchmark table that picks the layer
+
+
+def load_benchmark(model: str) -> pd.DataFrame:
+    """Reference-benchmark table: rows = layers (positional), columns = sample index."""
+    mat = pd.read_excel(DATA_METRICS / model / f"{REFERENCE_METRIC}.xlsx")
+    mat.columns = [int(c) for c in mat.columns]
+    return mat
+
+
+def load_metric_matrix(model: str, filename: str) -> pd.DataFrame:
+    """Pipeline table: rows = layers ('-' for the 4-mer), columns = sample index."""
+    mat = pd.read_excel(DATA_METRICS / model / filename).set_index("layer")
+    mat.columns = [int(str(c).split("_")[1]) for c in mat.columns]
+    return mat.sort_index().sort_index(axis=1)
+
+
+def reference_layer(model: str, mat: pd.DataFrame, samples=None):
+    """Layer of ``mat`` chosen by the model's reference benchmark.
+
+    Matched **by position**, not by layer number: ViraLM numbers its layers 0..11 in
+    the benchmark table and 1..12 in the metric matrices, so looking the layer up by
+    its number would silently shift it by one.  ``samples`` restricts the choice to a
+    subset of reference samples (used for the stricter held-out variant).
+    """
+    if len(mat) == 1:
+        return mat.index[0]        # layer-less representation: nothing to choose
+    bench = load_benchmark(model)
+    if len(bench) != len(mat):
+        raise ValueError(f"{model}: benchmark has {len(bench)} layers, "
+                         f"metric table has {len(mat)}")
+    columns = list(bench.columns) if samples is None else \
+        [c for c in bench.columns if c in set(samples)]
+    position = int(np.argmax(bench[columns].mean(axis=1, skipna=True).to_numpy()))
+    return mat.index[position]
+
+
+def reference_row(model: str, filename: str):
+    """(layer, values) of one metric table at the reference-chosen layer."""
+    mat = load_metric_matrix(model, filename)
+    layer = reference_layer(model, mat)
+    return layer, mat.loc[layer]
 
 
 def set_style() -> None:

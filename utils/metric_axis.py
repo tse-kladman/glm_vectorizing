@@ -9,13 +9,15 @@ metric_axis.py — прогон метрики как отдельной оси 
     P1  без преобразования + косинус   контроль: отделяет эффект масштабирования
     P2  стандартизация + евклид
     P3  без преобразования + евклид
-    P4  sqrt + евклид                  расстояние Хеллингера    | только для
-    P5  sqrt(JSD)                      Jensen-Shannon           | распределений
+    P4  MinHash (оценка Жаккара)       только скетчи — модель ``minhash``
+    P5  sqrt(JSD) = Jensen-Shannon     только распределения — модель ``kmer``
 
-P4 и P5 определены лишь для векторов-распределений, поэтому применяются только к
-k-mer-профилям; для эмбеддингов gLM они пропускаются (``--strict`` превращает
-пропуск в ошибку).  Это ограничение математическое, а не техническое: привести
-эмбеддинг к симплексу можно лишь произвольным преобразованием.
+Ограничения P4 и P5 математические, а не технические.  Привести эмбеддинг gLM к
+симплексу можно лишь произвольным преобразованием, поэтому JS к нему неприменим.
+MinHash же вообще работает не с вектором, а со множеством k-меров, поэтому ему
+нужно своё представление — скетчи из ``utils/minhash_sketch.py``, лежащие в
+``data/latent_dim/minhash/``.  Неприменимые пары модель/протокол пропускаются
+(``--strict`` превращает пропуск в ошибку).
 
 За один проход по соседям считаются сразу P@1..P@10 и CROSS P@1..P@10, то есть
 данные Fig. 4, Fig. 5 и Fig. 6 получаются одним прогоном.
@@ -55,7 +57,20 @@ from utils.compute_metrics import (PROTOCOLS, _as_protocol, _safe_pickle_load,
 
 KS = list(range(1, 11))          # P@1..P@10 за один проход по соседям
 VIRALM_LAYERS = range(1, 13)
-COMPOSITIONAL_MODELS = {'kmer'}  # единственное представление-распределение
+
+# Какие представления удовлетворяют требованию протокола.  P5 (JS) определён только
+# для распределений, то есть для k-mer-профилей; P4 (MinHash) — только для скетчей.
+# Длина слова выбирается на референсе (utils/k_sweep.py), и выбранный вариант лежит
+# в отдельной модели — kmer_k6, minhash_k8 и т.п., — поэтому сравнение по префиксу.
+MODEL_PREFIX_BY_REQUIREMENT = {
+    'distribution': ('kmer',),
+    'sketch': ('minhash',),
+}
+FLAT_MODEL_PREFIXES = ('kmer', 'minhash')      # представления без слоёв
+
+
+def _matches(model: str, prefixes) -> bool:
+    return any(model == p or model.startswith(f'{p}_k') for p in prefixes)
 
 # Каждый процесс загружает numpy/scipy/sklearn и свою копию эмбеддингов, поэтому
 # упираемся мы в память, а не в ядра.  На машинах с малым файлом подкачки спавн
@@ -94,7 +109,7 @@ def _load_sample(model: str, index: int, latent_dir: Path, layers=None):
 
 def _metrics_for_sample(model, protocol, reference, virus, virus_rc):
     """P@k и CROSS P@k одного сэмпла: {'pk': {layer: {k: v}}, 'cross': {...}}."""
-    layered = model != 'kmer'
+    layered = not _matches(model, FLAT_MODEL_PREFIXES)
     pk, cross = {}, {}
 
     layers = reference.keys() if layered else ['-']
@@ -174,9 +189,12 @@ def build_tasks(names, rc_names, models, protocols, n_ref, latent_dir, strict):
     for model in models:
         for protocol_name in protocols:
             protocol = PROTOCOLS[protocol_name]
-            if protocol.compositional and model not in COMPOSITIONAL_MODELS:
-                message = (f'{protocol.name} ({protocol.label}) неприменим к {model}: '
-                           f'эмбеддинги не являются распределениями')
+            prefixes = MODEL_PREFIX_BY_REQUIREMENT.get(protocol.requires)
+            if prefixes is not None and not _matches(model, prefixes):
+                reason = ('эмбеддинги не являются распределениями'
+                          if protocol.requires == 'distribution'
+                          else 'нужны скетчи MinHash (utils/minhash_sketch.py)')
+                message = f'{protocol.name} ({protocol.label}) неприменим к {model}: {reason}'
                 if strict:
                     raise SystemExit(f'ОШИБКА: {message}')
                 skipped.append(message)
