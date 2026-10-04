@@ -61,20 +61,46 @@ PLOTTED = {
 #  reproduces the figures as they stand; both are written out so the size of the #
 #  selection effect stays visible.                                              #
 # --------------------------------------------------------------------------- #
-SELECTIONS = ("split", "in_sample", "oracle")   # primary first
+SELECTIONS = ("reference", "reference_split", "split", "in_sample", "oracle")
+
+# Which reference-benchmark table picks the layer for the "reference" rules.  P@5 is
+# the natural choice: it is the same quantity the unseen-order panels report, just
+# measured on the reference set, so the layer is chosen by the task it is judged on.
+REFERENCE_METRIC = "P5"
 
 
-def _best_row(mat: pd.DataFrame, selection: str) -> tuple[str, pd.Series]:
-    """Pick the layer and return its values, under one of three selection rules.
+def _best_row(mat: pd.DataFrame, selection: str,
+              chooser: pd.DataFrame | None = None) -> tuple[str, pd.Series]:
+    """Pick the layer and return its values, under one of five selection rules.
 
-    split     choose on even samples, report on odd ones  -- primary, unbiased
-    in_sample choose and report on all 50                 -- reproduces the figures
-    oracle    choose and report on the odd samples        -- same reporting samples
-              as ``split``, so the difference between the two is the selection
-              optimism itself, uncontaminated by which half is scored
+    reference       layer taken from the model's reference benchmark, reported on
+                    all 50 samples -- the layer is chosen on a *different task*
+                    (clustering the reference set), never on the numbers reported
+    reference_split same, but the choice uses only even reference samples and the
+                    report only odd ones, so the two do not even share a sample draw
+    split           choose on even samples of this table, report on the odd ones
+    in_sample       choose and report on all 50            -- reproduces the figures
+    oracle          choose and report on the odd samples   -- same reported samples
+                    as ``split``, so the gap between them is the selection optimism
+
+    ``chooser`` is the reference-benchmark table; its rows are matched to ``mat`` by
+    position, because ViraLM numbers its layers 0..11 there and 1..12 here.
     """
     even = [c for c in mat.columns if c % 2 == 0]
     odd = [c for c in mat.columns if c % 2 == 1]
+
+    if selection in ("reference", "reference_split"):
+        if chooser is None:
+            raise ValueError(f"{selection} needs the reference benchmark table")
+        if len(chooser) != len(mat):
+            raise ValueError(f"layer count differs: reference table has {len(chooser)} "
+                             f"rows, this table has {len(mat)}")
+        choose_cols = ([c for c in chooser.columns if c % 2 == 0]
+                       if selection == "reference_split" else list(chooser.columns))
+        position = int(np.argmax(chooser[choose_cols].mean(axis=1, skipna=True).to_numpy()))
+        layer = mat.index[position]
+        report = odd if selection == "reference_split" else list(mat.columns)
+        return str(layer), mat.loc[layer, report]
 
     if selection == "in_sample":
         choose = report = list(mat.columns)
@@ -89,6 +115,13 @@ def _best_row(mat: pd.DataFrame, selection: str) -> tuple[str, pd.Series]:
     return str(layer), mat.loc[layer, report]
 
 
+def load_benchmark(model: str) -> pd.DataFrame:
+    """The model's reference-benchmark table, used to choose the layer."""
+    mat = pd.read_excel(fio.DATA_METRICS / model / f"{REFERENCE_METRIC}.xlsx")
+    mat.columns = [int(c) for c in mat.columns]
+    return mat
+
+
 def load_reference(model: str, metric: str, selection: str):
     """Fig. 1 tables: rows = layers (0..n), columns = sample index 0..49."""
     mat = pd.read_excel(fio.DATA_METRICS / model / f"{metric}.xlsx")
@@ -101,7 +134,9 @@ def load_pk_matrix(model: str, filename: str, selection: str):
     """Pipeline tables: 'layer' column + sample_<i> columns in arbitrary order."""
     mat = pd.read_excel(fio.DATA_METRICS / model / filename).set_index("layer")
     mat.columns = [int(c.split("_")[1]) for c in mat.columns]
-    return _best_row(mat.sort_index(axis=1), selection)
+    mat = mat.sort_index().sort_index(axis=1)      # rows too: positional layer match
+    chooser = load_benchmark(model) if selection.startswith("reference") else None
+    return _best_row(mat, selection, chooser)
 
 
 # --------------------------------------------------------------------------- #
@@ -179,6 +214,10 @@ def _extract_one(selection: str):
     samples, tests = [], []
 
     for figure, panel, source, loader in panels():
+        # Fig. 1 *is* the reference benchmark, so letting it choose its own layer from
+        # that same benchmark would be circular; those panels keep the other rules.
+        if selection.startswith("reference") and figure == "fig1":
+            continue
         data = {m: loader(m, selection) for m in MODELS}
 
         for model, (layer, values) in data.items():
@@ -538,9 +577,15 @@ def main():
     fio.set_style()
     samples, tests = extract()
 
-    # Figures show the primary analysis: layer chosen on held-out samples.
-    primary_samples = samples[samples["selection"] == "split"]
-    primary_tests = tests[tests["selection"] == "split"]
+    # Figures show the primary analysis for each figure: the unseen-order panels take
+    # the layer from the reference benchmark, Fig. 1 (which *is* that benchmark) keeps
+    # the held-out split.
+    def primary(frame):
+        rule = np.where(frame["figure"] == "fig1", "split", "reference")
+        return frame[frame["selection"] == rule]
+
+    primary_samples = primary(samples)
+    primary_tests = primary(tests)
 
     plot_boxes(primary_samples, primary_tests)
     plot_paired_diffs(primary_samples, primary_tests)
