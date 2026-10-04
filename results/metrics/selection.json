@@ -1,0 +1,26 @@
+{
+  "dnabert2": {
+    "layer": 3,
+    "k": null,
+    "score": 0.555197,
+    "chosen_by": "reference P5"
+  },
+  "dnabertS": {
+    "layer": 4,
+    "k": null,
+    "score": 0.603262,
+    "chosen_by": "reference P5"
+  },
+  "viralm": {
+    "layer": 2,
+    "k": null,
+    "score": 0.637392,
+    "chosen_by": "reference P5"
+  },
+  "evo2": {
+    "layer": 26,
+    "k": null,
+    "score": 0.612645,
+    "chosen_by": "reference P5"
+  }
+}
