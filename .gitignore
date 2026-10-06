@@ -1,6 +1,7 @@
 # Python / Jupyter
 __pycache__
 *.ipynb_checkpoints
+.pytest_cache
 .git
 
 # Local scratch notebooks (exploration, not part of the published pipeline)
@@ -16,6 +17,12 @@ compare_pk.ipynb
 /p@k_for_k/
 /for_article/
 /kmer_sweep/
+
+# Inputs that are too large to ship (see README)
+/data/unk_viruses/
+/data/preproc_unk_viruses/
+/data/random_samples/
+/data/latent_dim/
 
 # Large inputs and logs that are not shipped with the repository
 all_ictv_viruses_v1.fasta

@@ -1,23 +1,32 @@
-# Reproducing the figures (visualization/main_figures.ipynb, supplementary_figures.ipynb)
+# Everything except the two models that need their own environment.
+#
+#   pip install -r requirements.txt
+#
+# Drawing the figures from the committed numbers needs only the first block.
+
+# figures and tables
 numpy
 pandas
 matplotlib
-openpyxl          # pandas needs it to read the .xlsx metric tables
-scipy             # visualization/model_significance.py (paired tests between models)
-jupyterlab
+openpyxl            # pandas reads the .xlsx metric tables through it
 
-# Computing the metrics (run_pipeline.py, utils/, visualization/kmer_sweep.py)
+# metrics and statistics
+scipy               # paired tests, and the reference implementations the tests check
 scikit-learn
-scikit-learn-extra  # KMedoids; the k-mer sweep falls back to KMeans if it is missing
-biopython
+scikit-learn-extra  # KMedoids for the reference-set clustering
+
+# representations
+biopython           # FASTA parsing
 tqdm
-torch
+torch               # DNABERT-2 / DNABERT-S
 transformers
 datasets
 
-# Only used by the exploratory notebooks in visualization/exploratory/
-seaborn
-adjustText
+# notebooks and tests
+jupyterlab
+pytest
+seaborn             # exploratory notebooks only
+adjustText          # exploratory notebooks only
 
-# Evo2 and ViraLM are not installable alongside the packages above: they run in their own
-# conda environments (evo2_env, viralm), invoked by run_pipeline.py through `conda run`.
+# Evo2 and ViraLM are not installable alongside the packages above: they run in their
+# own conda environments (evo2_env, viralm) and are invoked through `conda run`.
