@@ -1,23 +1,23 @@
 {
   "git": {
-    "commit": "baaf0522ceef52ca3fe337f46fb18a2bd2706e29",
+    "commit": "4b3d6fbd9f509be914a3e4fa4221eb523ade8998",
     "dirty": true
   },
-  "python": "3.12.3",
-  "platform": "Linux-6.6.87.2-microsoft-standard-WSL2-x86_64-with-glibc2.39",
+  "python": "3.12.11",
+  "platform": "Linux-5.15.0-171-generic-x86_64-with-glibc2.35",
   "packages": {
-    "numpy": "2.5.4",
-    "pandas": "3.0.6",
-    "scipy": "1.18.1",
-    "scikit-learn": "1.9.1",
-    "matplotlib": "3.11.2",
+    "numpy": "1.26.4",
+    "pandas": "2.3.2",
+    "scipy": "1.16.1",
+    "scikit-learn": "1.7.1",
+    "matplotlib": "3.10.6",
     "openpyxl": "3.1.5",
-    "biopython": "1.88",
-    "tqdm": "4.70.1",
-    "torch": null,
-    "transformers": null,
-    "datasets": null,
-    "tokenizers": null
+    "biopython": "1.85",
+    "tqdm": "4.67.1",
+    "torch": "2.8.0",
+    "transformers": "4.49.0",
+    "datasets": "4.1.0",
+    "tokenizers": "0.21.0"
   },
   "stages": [
     {
@@ -78,14 +78,10 @@
     },
     {
       "stage": "figures",
-      "time_utc": "2026-10-11T15:28:13+00:00",
+      "time_utc": "2026-10-11T16:26:45+00:00",
       "command_line": [
         "run_pipeline.py",
-        "figures",
-        "--which",
-        "supplementary",
-        "--max-workers",
-        "1"
+        "figures"
       ],
       "seeds": {
         "seed": 42
