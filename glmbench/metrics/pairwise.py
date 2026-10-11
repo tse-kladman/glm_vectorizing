@@ -3,12 +3,17 @@
 Two complementary questions about a pair of orders A and B:
 
     cross_between      space = reference + B, query = A.  How often does an A
-                       fragment retrieve a B fragment instead of its own kind?
-                       Lower is better: the two orders are well separated.
+                       fragment retrieve a B fragment?  Lower is better: the two
+                       orders are well separated.  (Called "inter-order leakage" in
+                       the docs; unrelated to the fwd<->RC "RC proximity" of
+                       unseen.precision_rc_proximity, which was also once called
+                       "CROSS" and for which HIGHER is better.)
 
-    precision_with_other  space = reference + B + A, query = one label of A.  Does
-                       A still find itself when B shares the space?  Higher is
-                       better: a dense own-order cluster.
+    precision_with_other  space = reference + B + A, query = one genome (label) of A.
+                       Does the genome still find itself when B shares the space?
+                       Success = a fragment of the SAME GENOME, exactly as in
+                       unseen.precision_by_genome -- a within-genome compactness,
+                       not an order-level quantity.  Higher is better.
 
 Together they place a model on the compactness/separation plane of Fig. 7; the
 ideal sits top-left.  Unlike unseen.precision, cross_between treats all fragments
@@ -70,8 +75,10 @@ def precision_with_other(reference: dict, query: dict, other: dict, k: int,
             continue
 
         matrix = neighbours.transform(space, model)
-        found = neighbours.knn(matrix[queries], matrix, k + 1, model)[:, 1:]
-        per_label.append(neighbours.precision_at_ks(labels[found], labels[queries], [k])[k])
+        found = neighbours.knn_excluding(matrix[queries], matrix, k, model,
+                                         self_index=queries)
+        per_label.append(neighbours.precision_at_ks(
+            neighbours.labels_of(labels, found), labels[queries], [k])[k])
 
     return float(np.mean(per_label)) if per_label else 0.0
 

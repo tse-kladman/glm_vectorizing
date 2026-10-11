@@ -1,0 +1,6 @@
+# Only for the exploratory notebooks in visualization/ (not needed for the article).
+-r requirements.txt
+jupyterlab
+seaborn>=0.13.2
+adjustText
+scikit-learn-extra   # the original K-medoids; the package no longer needs it (may not build)

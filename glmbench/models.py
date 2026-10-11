@@ -18,7 +18,7 @@ the transformers tune their layer there instead.  Nothing is ever tuned on the
 unseen orders.
 """
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 
 
 @dataclass(frozen=True)
@@ -36,6 +36,10 @@ class Model:
     fixed_k: int | None = None       # word length, when it is not tuned
     k_values: tuple = ()             # word lengths tried on the reference set
     sketch_size: int = 0             # MinHash only
+    canonical: bool = False          # k-mer profile over canonical k-mers (RC-invariant)
+    revision: str | None = None      # HuggingFace commit / release pinned for the run;
+                                     # None = whatever the hub served (recorded in the
+                                     # run manifest only if you set it, so set it)
 
     @property
     def tunes_k(self) -> bool:
@@ -66,6 +70,16 @@ KMER = _register(Model(
     key="kmer", display="k-mer", color="#999999",
     kind="distribution", transform="standardize", metric="cosine",
     extractor="kmer", layered=False, fixed_k=4,
+))
+
+# The same profile, but over canonical k-mers: every word is replaced by
+# min(word, reverse complement) before counting, so the profile of a fragment and of
+# its reverse complement are identical by construction.  It is the RC-invariant
+# baseline against which the reverse-complement behaviour of the learned models is read.
+KMER_CANON = _register(Model(
+    key="kmer_canon", display="k-mer (canonical)", color="#000000",
+    kind="distribution", transform="standardize", metric="cosine",
+    extractor="kmer", layered=False, fixed_k=4, canonical=True,
 ))
 
 KMER_JS = _register(Model(
@@ -108,10 +122,11 @@ EVO2 = _register(Model(
 
 
 # Canonical order for figures and tables: baselines first, then the models.
-ORDER = ["kmer", "kmer_js", "minhash", "dnabert2", "dnabertS", "viralm", "evo2"]
+ORDER = ["kmer", "kmer_canon", "kmer_js", "minhash", "dnabert2", "dnabertS", "viralm", "evo2"]
 
-# The subset that the published figures were built from, kept so that the
-# regression tests can reproduce the committed numbers exactly.
+# The five models of the first release of the tables; kept so that the regression
+# tests can still reproduce those numbers exactly (the later additions -- MinHash,
+# Jensen-Shannon, canonical k-mers -- are tested separately).
 PUBLISHED = ["kmer", "dnabert2", "dnabertS", "viralm", "evo2"]
 
 

@@ -1,61 +1,109 @@
 # Viral genome embeddings: benchmarking genomic language models
 
-Code and data accompanying the article. Several genomic language models (DNABERT-2,
-DNABERT-S, ViraLM, Evo2) and three classical baselines are compared on viral genomes:
-how well each representation organises a reference set of known viruses, how well it
+Code and data accompanying the article *Assessing the Capacity of Genomic Language Models
+to Generate Informative Embeddings of Viral Genome Fragments* (submitted to MDPI Viruses).
+DNABERT-2, DNABERT-S, ViraLM and Evo2 are compared with four classical baselines (4-mer
+profile, canonical 4-mer profile, k-mer + Jensen-Shannon, MinHash) on viral genomes: how
+well each representation organises a reference set of known viruses, how well it
 generalises to virus orders the models have never seen, and whether it reads the two
 strands of a sequence as the same thing.
 
+> **Status of the numbers.** Several defects were found and fixed in the code after the
+> committed tables were produced (padding in the DNABERT pooling, which fragments were
+> taken, what two of the metrics actually measure, ...). The committed tables are kept,
+> but **those that depend on a fixed step must be recomputed on a GPU machine** -- see
+> [What requires re-running after the fixes](#what-requires-re-running-after-the-fixes).
+> Nothing in this repository was re-extracted or re-run on real embeddings after the fixes.
+
+---
+
+## Quick start (CPU only)
+
+No GPU, no genomes, no model weights.
+
 ```bash
 pip install -r requirements.txt
-python run_pipeline.py --help          # the stages
-python run_pipeline.py figures         # redraw every figure from the committed numbers
+python -m pytest tests -q                 # unit tests + the synthetic end-to-end run
+make smoke                                # the same end-to-end run alone (~2 min)
+python run_pipeline.py figures --plot-only   # redraw every figure from the committed CSVs
+python run_pipeline.py stats                 # recompute the paired tests from the committed tables
+python run_pipeline.py figures               # rebuild the CSVs from results/metrics, then draw
 ```
+
+`tests/test_end_to_end.py` builds a tiny synthetic world (genomes with class-specific
+composition, a mock ICTV table, two "orders") in a scratch directory -- the data root is
+overridable with the environment variable `GLMBENCH_ROOT` -- and runs
+`samples -> prep -> select -> extract -> benchmark -> metrics -> stats -> figures` through
+`glmbench.cli.main` for the four CPU models (`kmer`, `kmer_canon`, `kmer_js`, `minhash`).
+It asserts that every output exists, that the numbers are sane, and that nothing was
+written outside the root. The transformer extractors are not part of it.
+
+## Full reproduction (GPU)
+
+Needs the genomes (a FASTA directory whose record ids start with the GenBank accessions of
+the ICTV VMR isolates, plus the two unseen orders in `data/unk_viruses/<order>.fa`), a GPU
+for the four language models, and the Evo2 / ViraLM conda environments.
+
+```bash
+python run_pipeline.py samples --fasta-dir /path/to/genomes --seed 42        # 50 reference samples
+python run_pipeline.py prep --seed 42 --force                                # fragments + RC
+python run_pipeline.py select --models kmer_js minhash                       # word length (needs samples)
+python run_pipeline.py extract --models kmer kmer_canon kmer_js minhash
+python run_pipeline.py extract --models dnabert2 dnabertS --pooling mean --force
+python run_pipeline.py extract --models viralm                               # needs the ViraLM hook
+python run_pipeline.py extract --models evo2
+python run_pipeline.py benchmark --max-workers 2 --sample-threads 2          # ARI / P@5 / silhouette
+python run_pipeline.py select                                                # layers, on the benchmark
+python run_pipeline.py metrics --protocol both --max-workers 2 --sample-threads 2
+python run_pipeline.py stats
+python run_pipeline.py figures
+```
+
+`python run_pipeline.py all --fasta-dir ...` runs the same chain in one go. Every stage
+exits non-zero if anything was missing, corrupt or failed (see *Failure handling*), and
+writes `results/run_manifest.json`.
 
 ---
 
 ## Repository layout
-
-Three top-level folders, and nothing crosses the line between them:
 
 ```
 data/                 INPUTS ONLY -- what came from outside
     ictv_data/        ICTV Virus Metadata Resource (VMR MSL40)
     unk_viruses/      genomes of the unseen orders          not shipped, too large
     preproc_unk_viruses/  the same, cut into fragments      not shipped
-    random_samples/   the 50 reference samples              not shipped
+    random_samples/   the 50 reference samples (+ manifests) not shipped
     latent_dim/       extracted representations             not shipped
 
 results/              EVERY NUMBER the analysis produces
     metrics/          per-sample metric tables (xlsx), one folder per model
     metrics/selection.json   the layer and word length chosen for each model
+    metrics/distance_protocols/  legacy P0-P3 tables (see results/README.md)
+    metrics/legacy/   outputs of the old pipeline layout, kept for reference
     figure_data/      the exact numbers plotted in each figure (CSV, committed)
-    statistics/       paired tests between models (CSV, committed)
+    statistics/       paired tests, genome-level bootstrap intervals (CSV)
+    run_manifest.json what produced the numbers (commit, versions, seeds, command line)
 
-figures/              EVERY PLOT
-    main/             Fig. 1-7 of the article
-    supplementary/    every layer of every metric, grouped by metric
-    statistics/       the significance plots
-    exploratory/      output of the exploratory notebooks
-
+figures/              EVERY PLOT  (main/, supplementary/, statistics/, exploratory/)
 glmbench/             the package: all of the logic
 visualization/        notebooks that demonstrate how it is used
-tests/                unit tests and the regression gate
+tests/                unit tests, regression gate, end-to-end run
+scripts/ Makefile     one-command entry points
 ```
-
-The package itself is laid out in the order the analysis runs, so it can be read top
-to bottom:
 
 | Module | What it holds |
 |--------|---------------|
-| `config.py` | where everything lives on disk, and the shared defaults |
-| `models.py` | the registry: the representation **and** distance of each model |
-| `sequences.py` | genomes to fragments and reverse complements |
-| `representations/` | k-mer profiles, MinHash sketches, the transformer extractors |
-| `neighbours.py` | the nearest-neighbour core every metric is built on |
-| `metrics/` | reference-set, unseen-virus and pairwise metrics, and their runner |
+| `config.py` | where everything lives on disk (`GLMBENCH_ROOT`), shared defaults and the default seed |
+| `models.py` | the registry: representation **and** distance of each model |
+| `sequences.py` | genomes to fragments (complete pieces, seeded random subset) and reverse complements |
+| `samples.py` | the reference samples from the ICTV VMR + a genome directory |
+| `representations/` | k-mer (plain / canonical) profiles, MinHash sketches, pooling, the transformer extractors |
+| `neighbours.py` | the nearest-neighbour core every metric is built on (exclusion by index) |
+| `clustering.py` | K-medoids in numpy (no scikit-learn-extra) |
+| `metrics/` | unseen-order metrics, pairwise metrics, the reference benchmark, the runner |
 | `selection.py` | choosing the layer and the word length, always on the reference set |
-| `statistics.py` | paired tests and multiple-testing corrections |
+| `statistics.py` | paired tests, multiple-testing corrections, cluster bootstrap over genomes |
+| `provenance.py` | `results/run_manifest.json` |
 | `figures/` | every plot |
 | `cli.py` | the command line |
 
@@ -63,13 +111,13 @@ to bottom:
 
 ## Models
 
-A model is not just an encoder: it is a representation together with the distance that
-representation is compared under, because a distance is only defined on the right kind
-of vector. The registry in `glmbench/models.py` keeps the two together.
+A model is a representation together with the distance it is compared under. The registry
+in `glmbench/models.py` keeps the two together.
 
 | Model | Representation | Distance | Free parameter |
 |-------|----------------|----------|----------------|
-| `kmer` | 4-mer frequency profile | standardised, cosine | — |
+| `kmer` | 4-mer frequency profile | standardised, cosine | -- |
+| `kmer_canon` | **canonical** 4-mer profile (min of word and reverse complement; 136 entries) | standardised, cosine | -- |
 | `kmer_js` | k-mer frequency profile | Jensen-Shannon | word length *k* |
 | `minhash` | MinHash sketch of the canonical k-mer set | Jaccard estimate | word length *k* |
 | `dnabert2` | DNABERT-2 embeddings | standardised, cosine | layer |
@@ -77,31 +125,14 @@ of vector. The registry in `glmbench/models.py` keeps the two together.
 | `viralm` | ViraLM embeddings | standardised, cosine | layer |
 | `evo2` | Evo2-7B embeddings | standardised, cosine | layer |
 
-Jensen-Shannon is defined between probability distributions and MinHash compares sets,
-so neither can be applied to a transformer embedding — mapping one onto the simplex
-would take an arbitrary transform. The code refuses rather than guesses.
+`kmer_canon` is the RC-invariant baseline against which the strand behaviour of the learned
+models is read (`profile(x) == profile(RC(x))` is a unit test). MinHash is strand-invariant
+by construction too (canonical k-mers). Jensen-Shannon and MinHash cannot be applied to a
+transformer embedding; the code refuses rather than guesses. `Model.revision` pins a
+HuggingFace revision (default `None` = unpinned; set it, it is recorded in the manifest).
 
----
-
-## How the free parameters are chosen
-
-Every model has one free parameter — which layer to report, or how long the word
-should be. Tuning either on the unseen orders would mean reporting a number that was
-picked for being high, so **both are chosen on the reference viruses** and then held
-fixed:
-
-```bash
-python run_pipeline.py select
-```
-
-The layer comes from the model's reference benchmark (`P5.xlsx`), the word length from
-a sweep over the reference samples, and both are scored by the same quantity: P@5
-inside a reference sample. The choice is written to `results/metrics/selection.json`,
-and every unseen-order metric is then reported at that choice.
-
-One subtlety the code guards against: layers are matched to the metric tables **by
-position**, never by number. ViraLM numbers its layers 0..11 in the benchmark table and
-1..12 in the metric matrices, so a lookup by number would silently shift it by one.
+DNABERT-2/S: `--pooling mean` (default) is the mean of the token states over the positions
+the attention mask marks as real; `--pooling cls` takes the first token.
 
 ---
 
@@ -109,80 +140,204 @@ position**, never by number. ViraLM numbers its layers 0..11 in the benchmark ta
 
 | Stage | What it does | Needs |
 |-------|--------------|-------|
-| `prep` | genomes to 2 kb fragments, plus a reverse-complement copy | genomes |
+| `samples` | VMR + genomes to the 50 reference samples (`--list-classes` prints the qualifying classes, needs only the VMR) | genomes |
+| `prep` | genomes to 2 kb fragments (complete pieces only; at most 10, chosen at random with `--seed`), plus a reverse-complement copy | genomes |
 | `extract` | fragments to vectors, one folder per model | GPU for the transformers |
-| `select` | the layer and word length of each model | reference samples |
-| `metrics` | P@k and CROSS P@k on the unseen orders | extracted vectors |
-| `stats` | paired tests between models | metric tables |
+| `benchmark` | ARI, P@5, silhouette per layer and reference sample -> `results/metrics/<model>/{ARI,P5,silh}.xlsx` | extracted reference samples |
+| `select` | the layer and word length of each model | benchmark / reference samples |
+| `metrics` | unseen-order metrics, both protocols; per-genome tables; pairwise tables | extracted vectors |
+| `stats` | paired tests between models; genome-level bootstrap intervals | metric tables |
 | `figures` | every plot | metric tables |
-| `all` | the whole chain | |
+| `all` | the whole chain (`select` runs twice: word length before `extract`, layers after `benchmark`) | |
 
-```bash
-python run_pipeline.py prep
-python run_pipeline.py extract --models kmer dnabert2
-python run_pipeline.py select
-python run_pipeline.py metrics --layers selected      # only the chosen layer
-python run_pipeline.py figures --which main
-```
+Useful across stages: `--models`, `--seed` (default 42), `--dry-run`, `--force`,
+`--max-workers` (processes), `--sample-threads` (reference samples held in memory at once
+per task; one Evo2 sample is ~2 GB), `--memory-budget`, `--allow-missing`.
 
-Useful across all stages: `--models` to restrict the work, `--dry-run` to see it
-without doing it, `--force` to redo what already exists, `--max-workers` and
-`--memory-budget` to fit the machine.
+**Failure handling.** A reference sample that is missing or unreadable, a virus file that
+is absent, an RC file not aligned with its forward file: each is counted and printed, the
+affected tables are *not* written, and the stage exits non-zero -- unless `--allow-missing`
+is given, in which case the tables are written from the samples that did load and the loss
+is stated. `extract` writes `<model dir>/failed.txt` and exits non-zero if any file failed;
+`extract_evo2.py` writes `<name>.failed.txt` (record id and reason) and exits 1.
 
-**Parallelism.** Tasks (one model, one virus file) run in processes; the 50 reference
-samples inside a task run in threads. The limit is memory rather than cores — every
-process imports numpy/scipy and keeps one model's vectors resident — so `--max-workers`
-defaults to 8 rather than to the core count, and the blockwise distances stay inside
-`--memory-budget`. `--layers selected` scores only the chosen layer, which is 32 times
-less work for Evo2.
-
-Evo2 and ViraLM cannot be installed next to the rest; they run in their own conda
-environments (`evo2_env`, `viralm`) through `conda run`, and write the same pickles
-back.
+**Seeds.** Every random choice takes an explicit seed derived from `--seed`: fragment choice
+(per genome, from a stable hash of seed and genome id), reference draw *i* (`seed + i`),
+MinHash hash functions, K-medoids restarts, bootstrap, plot jitter. The seeds, the full
+command line, the git commit, Python and package versions and the model identifiers are in
+`results/run_manifest.json`, rewritten at the start of every stage.
 
 ---
 
 ## Metrics
 
-* **P@k** — of a fragment's k nearest neighbours, the fraction that share its class.
-  Higher is better.
-* **CROSS P@k** — the same, but counting neighbours from the reverse-complement copy,
-  which the forward fragment is searched against but is not part of. High means the
-  model reads both strands alike.
-* **ARI** — adjusted Rand index of a K-medoids clustering against the true labels.
-* **Silhouette** — cosine silhouette of that clustering.
+Two different things were both called "CROSS" in earlier versions. They are unrelated and
+named differently here:
 
-Every metric is a mean over the 50 reference samples, and every model is scored on the
-same samples, which is what makes the comparisons paired.
+* **RC proximity** (legacy "CROSS P@k", file prefix `cross_P`, Fig. 5): fragment *x* is
+  searched in reference + the RC fragments of **its own genome**; success = a neighbour is
+  *any* RC fragment of that genome. **Higher is better.** It does not test whether the
+  neighbour is x's *own* reverse complement; a model that merely keeps the fragments of a
+  genome together scores high.
+* **Inter-order leakage** (Fig. 7, `pairwise_*/cross_*`): how often a fragment of order A
+  retrieves a fragment of order B. **Lower is better.**
+
+On the unseen orders, with the reference sample in the space (see `glmbench/metrics/unseen.py`):
+
+| Name | Tables | Success means | Notes |
+|------|--------|---------------|-------|
+| `precision_by_genome` (legacy "P@k") | `P@<k>_matrix_*` | a neighbour is from the **same genome** | measures how tightly one genome's fragments cluster, **not** grouping by order; ceiling is (n-1)/k when a genome has n fragments (P@10 <= 0.9 with 10 fragments) |
+| `precision_by_order` | `Porder@<k>_matrix_*` | a neighbour is from **another genome of the same order**; every fragment of the query's own genome is excluded (leave-genome-out) | the chance level is the share of such fragments in the space (`chance_order_precision`); needs >= 2 genomes |
+| `own_rc` hit@k | `ownrc_hit@<k>_matrix_*` | the **fragment's own** reverse complement is among its k nearest neighbours (space = reference + all forward + all RC fragments of the order, x itself excluded) | RC rows are index-aligned with forward rows (asserted) |
+| `own_rc` similarity | `ownrc_sim_matrix_*` | mean similarity between x and RC(x): cosine (vector models, in the standardised space), sketch agreement (MinHash), 1 - JSD (Jensen-Shannon) | high for any model that keeps a genome in one clump; read together with hit@k |
+| RC proximity | `cross_P@<k>_matrix_*` | see above | legacy |
+
+`results/metrics/<model>/per_genome_<kind>_<virus>.csv.gz` keeps the value of every genome
+(`kind` = `genome`, `order`, `cross`, `ownrc`; `layer, sample, genome, metric, value`, for
+k = 5 and 10), so intervals that treat the **genome** as the unit are possible:
+`statistics.bootstrap_ci_by_genome` (cluster bootstrap) is run by `stats` and written to
+`results/statistics/genome_bootstrap_ci.csv`.
+
+Reference benchmark (`benchmark`; per layer and reference sample, cosine, standardised):
+
+* **ARI** -- adjusted Rand index of a K-medoids clustering (k = number of classes, fixed
+  random state, numpy implementation in `clustering.py`, `k-medoids++` start, best of 5)
+  against the true labels.
+* **P@5** -- of a fragment's 5 nearest neighbours (itself excluded **by index**), the share
+  with its class.
+* **Silhouette** -- cosine silhouette **of the true labels** (not of the K-medoids
+  clustering).
+
+Every table is per reference sample; the 50 samples are shared by all models, which makes
+comparisons paired.
 
 ---
 
-## Reproducing the figures
+## Methods notes (read before interpreting a number)
 
-The metric tables and the figure numbers are both committed, so the figures redraw
-from a clean checkout with no GPU, no genomes and no extracted vectors:
-
-```bash
-python run_pipeline.py figures              # rebuild the numbers, then draw
-python run_pipeline.py figures --plot-only  # draw from the committed numbers
-```
-
-`visualization/main_figures.ipynb` walks through the same thing step by step, and
-`visualization/exploratory/` keeps the original working notebooks.
+* **What the Wilcoxon p-values mean.** The 50 reference samples are 50 overlapping draws of
+  known viruses. A paired test over them asks whether A beats B when the *reference draw*
+  changes; it does not test robustness to the choice of viruses (which unseen orders, which
+  genomes). With n = 50 the exact two-sided p cannot go below 2/2^50 = 1.8e-15 and **hits
+  that floor** whenever one model wins on every sample (36% of the distinct comparisons
+  under the primary rule): "won every draw", not a probability. For uncertainty over
+  genomes use the bootstrap intervals.
+* **Number of comparisons.** `p_holm_all` / `p_bh_all` are over *distinct* comparisons.
+  With the 7 models in the committed tables there are 21 pairs per panel; under the primary
+  `reference` rule Fig. 1 is excluded (it *is* the benchmark that chooses the layer) and
+  panels that read the same table are counted once: 4 (Fig. 4) + 2 (Fig. 5) + 20 (Fig. 6)
+  - 2 shared (P@5 of the two orders) = 24 tables x 21 pairs = **504** distinct comparisons
+  (5 not significant after FDR). With the original 5 models it was 24 x 10 = 240. The
+  rules that include Fig. 1 have 534 (Fig. 1 exists only for the 5 models that have a
+  benchmark).
+* **Transductive scaling.** For vector models `StandardScaler` is fitted on each query
+  set -- reference sample + the fragments being scored -- not once on the reference. A
+  fragment's neighbours therefore depend (slightly) on which other fragments are in the
+  space, and the protocols (`genome`: reference + one genome; `order`: reference + the
+  whole order) scale differently. A `reference`-fitted scaler would be cleaner and has not
+  been run.
+* **Layer selection.** Layers are chosen on the reference benchmark (P@5) and then held
+  fixed. Positions, never numbers: ViraLM's benchmark rows are 0..11 while its files and
+  metric matrices are layers 1..12, so position *p* is layer *p* + 1
+  (`selection.layer_label`; `--layers selected` had silently scored layer *p* before).
+* **Selection optimism.** The `oracle` and `split` rules score the same samples and differ
+  only in where the layer was chosen, so their gap is the optimism of choosing a layer on
+  the data it is scored on: median 0, at most +0.011. The chosen layer **differs in 5.5% of
+  model x panel scores** (10 of 181; the PNG title states this number; an earlier README said
+  "roughly half", which was wrong).
+* **Fragments.** At most 10 complete 2 kb non-overlapping pieces per genome, chosen at
+  random (seeded, per genome); the incomplete tail is dropped.
+* **Reference samples.** Classes with *more than 10 species* in the VMR, 10 random genomes
+  (exemplar isolates) per class, up to 10 random non-overlapping 2 kb fragments per genome,
+  50 independent draws with seeds `seed + i`. On `VMR_MSL40.v2.20251013` this gives
+  **36** qualifying classes (`python run_pipeline.py samples --list-classes`), not the 39
+  stated in the article; the cause (another VMR release, another threshold) is unknown. The
+  two unseen orders (Egovirales, Mriyavirales) do not appear in this VMR file.
 
 ---
+
+## ViraLM (not bundled)
+
+ViraLM (https://github.com/ChengPENG-wolf/ViraLM) has its own licence, which you must check
+before use; this repository does not contain it. The pipeline calls a *hook* script that you
+install at `envs_for_glms/ViraLM/viralm_hook.py` and that runs in the `viralm` conda env
+(`conda run -n viralm python viralm_hook.py ...`, working directory = the hook's folder).
+`extract` stops immediately, with this message, if the file is missing. The hook must:
+
+* accept `--input_pth <FASTA>` `--output_pth <directory>` `--batch_size <int>`
+  `--layers_to_monitor L1 L2 ... L12` (layers numbered **1..12**);
+* write, for every requested layer *L*, `<output_pth>/<FASTA stem>_layer_<L>.pkl`
+  (`sample_7.fa` -> `sample_7_layer_1.pkl` ... `sample_7_layer_12.pkl`), a pickled `dict`
+  `{key: 1-D numpy array}` with **one entry per window**, in FASTA order, where
+  `key = "<FASTA record id>_<start>_<end>"` and the record id is `<label>_<index>`; the label
+  is recovered by dropping the last three `_`-separated fields (`store._viralm_groups`);
+* keep the order of entries equal to the order of the FASTA records (the RC files are
+  matched to the forward files by index).
+
+The package assumes layer files `1..12`; whether layer 1 is the embedding output or the first
+block is defined by the hook and must be checked there. **Position matching rule:** the
+benchmark tables (`P5.xlsx` ...) have 12 rows by position 0..11, the metric matrices have row
+labels 1..12, and position *p* corresponds to layer *p* + 1; `selection.json` stores the
+position (ViraLM `layer: 2` is file `layer_3`).
+
+Evo2 (`extract_evo2.py`, in `evo2_env`) writes `{block: {label: [vectors]}}` for the 32
+`blocks.<i>.mlp.l3` outputs. Check the licences of Evo 2, ViraLM, DNABERT-2 and DNABERT-S
+yourself (`LICENSE.TODO.md`); none is asserted here.
+
+---
+
+## What requires re-running after the fixes
+
+The committed `results/metrics/<model>/` tables were produced **before** these fixes; they
+are unchanged. On the GPU machine (commands in *Full reproduction*):
+
+| Fix | Stale | Re-run |
+|-----|-------|--------|
+| DNABERT pooling: padding was averaged in (embedding layer certainly; encoder layers possibly -- DNABERT-2's remote code appears to return unpadded layers, **not verified here**) | all `dnabert2`, `dnabertS` embeddings and every table/selection derived from them (selected layers 3 and 4) | `extract --models dnabert2 dnabertS --force`, then `benchmark`, `select`, `metrics` |
+| Fragments: the old code kept the first 10 contiguous pieces and a short tail | every unseen-order table of **all** models (the fragment set changes) | `prep --force`, `extract --force`, `metrics` |
+| Reference samples: old draws not reproducible from this code (it used a fixed `random_state` for the genome draw and an unseeded block of fragments) | all reference benchmark tables, layer selection, word-length sweeps, hence everything downstream | `samples --force`, `benchmark`, `select`, ... -- or keep the original `data/random_samples` if you still have them and skip `samples` |
+| Benchmark computation (K-medoids implementation, silhouette of true labels) was not in the repository | `ARI/P5/silh.xlsx` of the five original models (equivalent in kind, not bit-identical); none exist for `kmer_js`, `minhash`, `kmer_canon`, so they are absent from Fig. 1-2 | `benchmark` |
+| New metrics | `Porder`, `ownrc_*`, `per_genome_*`, genome bootstrap: do not exist yet | `metrics --protocol both`, `stats` |
+| Pairwise (Fig. 7) tables | missing for `kmer_js`, `minhash`, `kmer_canon` (absent from Fig. 7) | `metrics` |
+| `kmer_canon` | no data at all | `extract --models kmer_canon`, `benchmark`, `metrics` |
+| Exclusion by index | tiny changes wherever fragments are duplicated | covered by the above |
+
+`results/figure_data`, `results/statistics` and `figures/` were rebuilt from the committed
+tables for the 7 models (see `results/README.md` for exactly what changed) and are stale as soon as any
+row above is re-run.
+
+---
+
+## Figure numbering
+
+Repository numbering follows the order the pipeline draws the figures; the mapping to the
+article's figure numbers must be confirmed by the authors (TODO).
+
+| Repository | Content | Article |
+|------------|---------|---------|
+| Fig. 1 | reference benchmark, best layer per model (ARI, P@5, silhouette) | TODO |
+| Fig. 2 | layer-wise ARI and P@5 | TODO |
+| Fig. 3 | 4-mer word-length sweep | TODO |
+| Fig. 4 | unseen orders, P@5 (genome level), forward and RC | TODO |
+| Fig. 5 | RC proximity P@5 (legacy "CROSS P@5") | TODO |
+| Fig. 6 | P@k against k | TODO |
+| Fig. 7 | compactness vs inter-order leakage, per layer | TODO |
+| Fig. 4b, 5b, 5c | order-level P@5; own-RC hit@5; own-RC similarity (new; appear after `metrics`) | -- |
+| `figures/statistics/` | significance plots | supplement |
+| `figures/supplementary/` | per layer plots; `distance_protocols` | supplement |
 
 ## Tests
 
 ```bash
-python -m pytest tests/
+python -m pytest tests -q
 ```
 
-`tests/test_primitives.py` checks the claims the analysis rests on: that Jensen-Shannon
-agrees with scipy, that a MinHash sketch is identical for a fragment and its reverse
-complement and estimates the Jaccard index, that P@1..P@10 read off one neighbour list
-equals ten separate searches, and that layers are matched by position.
+`test_primitives` (distances, k-mer/MinHash, P@k prefixes, layer matching, corrections),
+`test_sequences`, `test_pooling`, `test_unseen` (synthetic worlds with known answers),
+`test_reference` (K-medoids, ARI/P@5/silhouette, agreement with the neighbours module),
+`test_samples`, `test_bootstrap`, `test_extraction`, `test_runner`, `test_regression` (the
+committed figure CSVs of the five original models must not move) and `test_end_to_end`.
 
-`tests/test_regression.py` rebuilds every committed figure CSV from the committed
-metric tables and compares it against the committed copy, so a refactor that changes a
-published number fails the suite.
+`visualization/main_figures.ipynb` walks through the figures; `visualization/exploratory/`
+holds the original exploratory notebooks (not needed to reproduce anything; they need
+`requirements-dev.txt` and read legacy tables). Licence: not chosen yet, see `LICENSE.TODO.md`.
