@@ -15,7 +15,7 @@ import matplotlib as mpl
 import pandas as pd
 
 from .. import config
-from ..models import MODELS, ORDER
+from ..models import MODELS
 
 
 def set_style() -> None:
@@ -46,12 +46,6 @@ def color(key: str) -> str:
     return MODELS[key].color if key in MODELS else "#444444"
 
 
-def order_of(keys) -> list:
-    """Model keys in canonical order."""
-    present = set(keys)
-    return [key for key in ORDER if key in present]
-
-
 def save_table(frame: pd.DataFrame, name: str, index: bool = False,
                float_format: str | None = None, directory: Path | None = None) -> Path:
     """Write the numbers behind a figure to results/figure_data/<name>.csv.
@@ -76,5 +70,8 @@ def save_figure(figure, name: str, kind: str = "main", formats=("png", "pdf")) -
     path = directory / name
     path.parent.mkdir(parents=True, exist_ok=True)
     for extension in formats:
-        figure.savefig(f"{path}.{extension}")
+        target = Path(f"{path}.{extension}")
+        target.unlink(missing_ok=True)       # re-create rather than overwrite in place
+                                             # (some network/Windows mounts refuse the latter)
+        figure.savefig(target)
     print(f"  figure  -> {config.relative(path)}.{{{','.join(formats)}}}")
