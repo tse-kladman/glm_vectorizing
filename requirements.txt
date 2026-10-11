@@ -2,31 +2,28 @@
 #
 #   pip install -r requirements.txt
 #
-# Drawing the figures from the committed numbers needs only the first block.
+# Lower bounds are the versions the test suite was last run with (Python 3.12.3):
+# older versions are untested, newer ones are expected to work.  The exact versions
+# of a real run are written to results/run_manifest.json.
+#
+# CPU-only work (tests, k-mer / MinHash / Jensen-Shannon / canonical baselines, the
+# reference benchmark, statistics, figures) needs only this first block.
 
-# figures and tables
-numpy
-pandas
-matplotlib
-openpyxl            # pandas reads the .xlsx metric tables through it
+numpy>=2.5.4
+pandas>=3.0.6
+scipy>=1.18.1
+scikit-learn>=1.9.1      # nearest neighbours, silhouette, ARI (K-medoids is in-package)
+matplotlib>=3.11.2
+openpyxl>=3.1.5          # pandas reads/writes the .xlsx metric tables through it
+biopython>=1.88          # FASTA parsing
+tqdm>=4.70.1
+pytest>=9.1.1
 
-# metrics and statistics
-scipy               # paired tests, and the reference implementations the tests check
-scikit-learn
-scikit-learn-extra  # KMedoids for the reference-set clustering
-
-# representations
-biopython           # FASTA parsing
-tqdm
-torch               # DNABERT-2 / DNABERT-S
-transformers
-datasets
-
-# notebooks and tests
-jupyterlab
-pytest
-seaborn             # exploratory notebooks only
-adjustText          # exploratory notebooks only
+# DNABERT-2 / DNABERT-S are extracted in-process (GPU machine only).  Not pinned here:
+# use the versions your GPU machine provides; run_manifest.json records them.
+# torch
+# transformers
+# datasets
 
 # Evo2 and ViraLM are not installable alongside the packages above: they run in their
 # own conda environments (evo2_env, viralm) and are invoked through `conda run`.

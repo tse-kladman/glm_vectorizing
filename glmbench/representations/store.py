@@ -33,15 +33,21 @@ def save(data: dict, path: Path) -> None:
         pickle.dump(data, handle)
 
 
-def _load_pickle(path: Path):
-    """Load a pickle, returning None (with a warning) if it is missing or broken."""
+def _load_pickle(path: Path, problems: list | None = None):
+    """Load a pickle.  A missing file gives ``None``; a corrupt one also gives ``None``
+    but is *reported*: printed, and appended to ``problems`` when a list is passed,
+    so that the caller can count what was lost instead of silently scoring on less.
+    """
     try:
         with open(path, "rb") as handle:
             return pickle.load(handle)
     except FileNotFoundError:
         return None
-    except (EOFError, pickle.UnpicklingError, OSError) as error:
+    except (EOFError, pickle.UnpicklingError, OSError, ValueError, AttributeError,
+            ImportError, IndexError) as error:
         print(f"  WARNING: cannot read {path.name}: {error}")
+        if problems is not None:
+            problems.append((path.name, f"corrupt: {error}"))
         return None
 
 
@@ -53,28 +59,39 @@ def _viralm_groups(raw: dict) -> dict:
     return dict(groups)
 
 
-def load_virus(model: Model, name: str, latent_dir: Path | None = None):
+def load_virus(model: Model, name: str, latent_dir: Path | None = None,
+               problems: list | None = None):
     directory = model_dir(model, latent_dir)
     if model.extractor == "viralm":
         by_layer = {}
         for layer in VIRALM_LAYERS:
-            raw = _load_pickle(directory / f"{name}_layer_{layer}.pkl")
+            raw = _load_pickle(directory / f"{name}_layer_{layer}.pkl", problems)
             if raw is not None:
                 by_layer[layer] = _viralm_groups(raw)
         return by_layer or None
-    return _load_pickle(directory / f"{name}.pickle")
+    return _load_pickle(directory / f"{name}.pickle", problems)
 
 
-def load_sample(model: Model, index: int, latent_dir: Path | None = None, layers=None):
+def load_sample(model: Model, index: int, latent_dir: Path | None = None, layers=None,
+                problems: list | None = None):
+    """One reference sample, or ``None`` if it is missing or unreadable.
+
+    ``problems`` (a list) collects ``(file, reason)`` for corrupt files and for
+    ViraLM samples that lack some of their layer files.
+    """
     directory = model_dir(model, latent_dir)
     if model.extractor == "viralm":
+        wanted = list(layers or VIRALM_LAYERS)
         by_layer = {}
-        for layer in layers or VIRALM_LAYERS:
-            raw = _load_pickle(directory / f"sample_{index}_layer_{layer}.pkl")
+        for layer in wanted:
+            raw = _load_pickle(directory / f"sample_{index}_layer_{layer}.pkl", problems)
             if raw is not None:
                 by_layer[layer] = _viralm_groups(raw)
+        if by_layer and len(by_layer) < len(wanted) and problems is not None:
+            lost = sorted(set(wanted) - set(by_layer))
+            problems.append((f"sample_{index}", f"missing ViraLM layers {lost}"))
         return by_layer or None
-    return _load_pickle(directory / f"sample_{index}.pickle")
+    return _load_pickle(directory / f"sample_{index}.pickle", problems)
 
 
 def available(model: Model, latent_dir: Path | None = None) -> bool:

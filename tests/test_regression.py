@@ -39,7 +39,13 @@ def committed(name: str) -> pd.DataFrame:
     path = config.ROOT / "results" / "figure_data" / f"{name}.csv"
     if not path.exists():
         pytest.skip(f"{name}.csv is not committed")
-    return pd.read_csv(path)
+    frame = pd.read_csv(path)
+    # The committed CSVs now also hold the models added later (MinHash, k-mer JS); this
+    # test pins the numbers of the five original models, which must not have moved.
+    # The added models are checked in test_added_models_are_present.
+    if "model" in frame.columns:
+        frame = frame[frame["model"].isin(registry.PUBLISHED)]
+    return frame.reset_index(drop=True)
 
 
 @pytest.mark.parametrize("name", list(MAIN_TABLES))
@@ -63,3 +69,13 @@ def test_rebuilds_the_committed_numbers(name):
             pd.testing.assert_series_equal(
                 rebuilt[column].astype(str), expected[column].astype(str),
                 check_names=False, obj=f"{name}[{column}]")
+
+
+def test_added_models_are_present_in_the_figure_data():
+    """The 7-model rebuild: MinHash and k-mer JS appear where their tables exist."""
+    if not (config.METRICS / "minhash").is_dir():
+        pytest.skip("metric tables are not present")
+    fig4 = pd.read_csv(config.ROOT / "results" / "figure_data" / "fig4_newvirus_p5.csv")
+    assert {"kmer_js", "minhash"} <= set(fig4["model"])
+    fig1 = pd.read_csv(config.ROOT / "results" / "figure_data" / "fig1_reference_benchmark.csv")
+    assert set(fig1["model"]) == set(registry.PUBLISHED)     # no benchmark table yet for the others

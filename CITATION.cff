@@ -1,0 +1,15 @@
+cff-version: 1.2.0
+message: "If you use this code, please cite the article below."
+title: "Assessing the Capacity of Genomic Language Models to Generate Informative Embeddings of Viral Genome Fragments"
+type: software
+authors:
+  - family-names: Kladchenko
+    given-names: "TODO"            # TODO: initials unknown
+  - family-names: Popov
+    given-names: "N. S."
+  - family-names: Manolov
+    given-names: "A. I."
+# TODO: the order and full names of the authors, the journal (MDPI Viruses), the DOI
+# and the publication year are to be filled in by the authors once known.
+# TODO: add `license:` once the owner has chosen one (see LICENSE.TODO.md).
+repository-code: "TODO"

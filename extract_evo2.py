@@ -7,6 +7,8 @@ Evo2 embedding extractor — запускать в окружении evo2_env.
 
 Формат FASTA: заголовки вида  >НАЗВАНИЕ_idx
 Выходной файл: {outdir}/{name}.pickle
+  Если хоть один фрагмент не обработан: id пишутся в {outdir}/{name}.failed.txt,
+  код возврата 1 (pickle при этом сохраняется, но неполный).
   Структура: {block_idx: {label: [np.array, ...]}}  (32 блока)
 """
 
@@ -55,11 +57,15 @@ def main():
     records = list(SeqIO.parse(args.fasta, "fasta"))
     print(f"Sequences to process: {len(records)}", flush=True)
 
+    failed = []                      # (record id, reason): never swallowed silently
     for record in tqdm(records, file=sys.stdout):
         seq   = str(record.seq)
         label = extract_label(record.id)
         if not seq:
+            failed.append((record.id, "empty sequence"))
             continue
+
+        ids = embeddings = None      # defined up front, so `finally` can always clean up
         try:
             ids = torch.tensor(
                 model.tokenizer.tokenize(seq), dtype=torch.int
@@ -70,17 +76,17 @@ def main():
                     ids, return_embeddings=True, layer_names=layer_names
                 )
 
-            for i, name in enumerate(layer_names):
-                emb = embeddings[name].detach().cpu().float().numpy()
-                layer_emb[i][label].append(np.mean(emb, axis=1).squeeze())
+            # collect every layer first, so a failure half-way leaves no partial record
+            vectors = [np.mean(embeddings[name].detach().cpu().float().numpy(),
+                               axis=1).squeeze() for name in layer_names]
+            for i, vector in enumerate(vectors):
+                layer_emb[i][label].append(vector)
 
         except Exception as e:
             print(f"  Error [{record.id}]: {e}", flush=True)
+            failed.append((record.id, f"{type(e).__name__}: {e}"))
         finally:
-            try:
-                del ids, embeddings
-            except NameError:
-                pass
+            del ids, embeddings
             torch.cuda.empty_cache()
             gc.collect()
 
@@ -88,7 +94,17 @@ def main():
     out_path = os.path.join(args.outdir, f"{args.name}.pickle")
     with open(out_path, "wb") as f:
         pickle.dump(dict(layer_emb), f)
-    print(f"Saved → {out_path}", flush=True)
+    print(f"Saved -> {out_path}", flush=True)
+
+    failed_path = os.path.join(args.outdir, f"{args.name}.failed.txt")
+    if failed:
+        with open(failed_path, "w", encoding="utf8") as f:
+            f.writelines(f"{record_id}\t{reason}\n" for record_id, reason in failed)
+        print(f"FAILED: {len(failed)} of {len(records)} sequences "
+              f"(ids in {failed_path})", flush=True)
+        sys.exit(1)                   # the driver must not mistake this for a clean run
+    elif os.path.exists(failed_path):
+        os.remove(failed_path)        # a clean re-run clears the stale list
 
 
 if __name__ == "__main__":
