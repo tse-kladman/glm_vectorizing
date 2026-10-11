@@ -30,6 +30,7 @@ def virus_label(name: str) -> str:
 
 
 def build_reference(models, metrics_dir=None) -> pd.DataFrame:
+    models = reference.available(models, metrics_dir=metrics_dir)
     frame = pd.concat([reference.layerwise(models, metric, metrics_dir)
                        for metric in reference.METRICS], ignore_index=True)
     save_table(frame, "supplementary/layerwise_reference")
@@ -52,7 +53,7 @@ def build_unseen(models, metrics_dir=None) -> pd.DataFrame:
                 rows.append({"virus": virus_label(virus), "model": model.key,
                              "layer": int(layer), "mean": float(mean[layer]),
                              "std": float(std[layer])})
-    frame = pd.DataFrame(rows)
+    frame = pd.DataFrame(rows, columns=["virus", "model", "layer", "mean", "std"])
     save_table(frame, "supplementary/layerwise_newvirus_p5")
     return frame
 
@@ -93,6 +94,8 @@ def draw_reference(models, metrics_dir=None) -> None:
 
 def draw_unseen(models) -> None:
     frame = load_table("supplementary/layerwise_newvirus_p5")
+    if frame.empty:                          # no layered model among those scored
+        return
     for virus in frame["virus"].unique():
         for model in models:
             data = frame[(frame["virus"] == virus)
@@ -106,11 +109,77 @@ def draw_unseen(models) -> None:
                   highlight=selection.load().get(model.key, {}).get("layer"))
 
 
+# ── distance protocols P0..P5 ───────────────────────────────────────────────
+
+PROTOCOLS = [("P0", "standardise + cosine"), ("P1", "raw + cosine"),
+             ("P2", "standardise + Euclidean"), ("P3", "raw + Euclidean"),
+             ("P4", "MinHash (k=6)"), ("P5", "Jensen-Shannon (k=4)")]
+PROTOCOL_GROUPS = [("Egovirales_preproc", "Egovirales"), ("Mriyavirales_preproc", "Mriyavirales"),
+                   ("REVERSECOMPLEMENTEgovirales_preproc", "Egovirales (RC)"),
+                   ("REVERSECOMPLEMENTMriyavirales_preproc", "Mriyavirales (RC)")]
+
+
+def _protocol_file(protocol: str, virus: str, metrics_dir=None):
+    """Legacy table of the k-mer profile under P0-P3; P4 and P5 are the MinHash and
+    Jensen-Shannon models of the current registry (their legacy copies were identical)."""
+    base = metrics_dir or config.METRICS
+    name = tables.matrix_name("P", config.PK_FOR_FIGURES, virus)
+    if protocol == "P4":
+        return base / "minhash" / name
+    if protocol == "P5":
+        return base / "kmer_js" / name
+    return base / "distance_protocols" / protocol / "kmer" / name
+
+
+def build_protocols(metrics_dir=None) -> pd.DataFrame:
+    """P@5 of the 4-mer profile under each distance protocol (genome-level, legacy)."""
+    rows = []
+    for protocol, label in PROTOCOLS:
+        for virus, group in PROTOCOL_GROUPS:
+            path = _protocol_file(protocol, virus, metrics_dir)
+            if not path.exists():
+                continue
+            values = tables.load_matrix(path).iloc[0]
+            rows.append({"protocol": protocol, "label": label, "group": group,
+                         "mean": float(values.mean()), "std": float(values.std(ddof=0))})
+    frame = pd.DataFrame(rows, columns=["protocol", "label", "group", "mean", "std"])
+    save_table(frame, "supplementary/protocol_comparison")
+    return frame
+
+
+def draw_protocols() -> None:
+    import matplotlib.pyplot as plt
+    import numpy as np
+
+    frame = load_table("supplementary/protocol_comparison")
+    if frame.empty:
+        return
+    labels = [f"{p}\n{label}" for p, label in PROTOCOLS if p in set(frame["protocol"])]
+    keys = [p for p, _ in PROTOCOLS if p in set(frame["protocol"])]
+    figure, axis = plt.subplots(figsize=(10, 4.8))
+    width = 0.8 / len(PROTOCOL_GROUPS)
+    for index, (_, group) in enumerate(PROTOCOL_GROUPS):
+        data = frame[frame["group"] == group].set_index("protocol").reindex(keys)
+        axis.bar(np.arange(len(keys)) + (index - 1.5) * width, data["mean"], width,
+                 yerr=data["std"], capsize=2, label=group, edgecolor="black", linewidth=0.3)
+    axis.set_xticks(range(len(keys)))
+    axis.set_xticklabels(labels, fontsize=8)
+    axis.set_ylabel("Mean Precision@5 (genome level)")
+    axis.set_title("4-mer profile under different distance protocols\n"
+                   "(P4 = MinHash sketch, P5 = Jensen-Shannon profile: different representations)")
+    axis.legend(fontsize=8, ncol=2)
+    figure.tight_layout()
+    save_figure(figure, "distance_protocols", kind="supplementary")
+    plt.close(figure)
+
+
 def build_all(models, metrics_dir=None) -> None:
     build_reference(models, metrics_dir)
     build_unseen(models, metrics_dir)
+    build_protocols(metrics_dir)
 
 
 def draw_all(models, metrics_dir=None) -> None:
     draw_reference(models, metrics_dir)
     draw_unseen(models)
+    draw_protocols()

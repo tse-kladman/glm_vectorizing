@@ -3,6 +3,18 @@
 Each figure has a ``build_*`` that turns metric tables into the CSV behind it and a
 ``draw_*`` that renders that CSV.
 
+Numbering.  The repository numbers its figures 1-7 in the order the pipeline draws
+them; the mapping to the article's numbering is the table in ``results/README.md``.
+Models without the tables a figure needs (MinHash and Jensen-Shannon have no
+reference benchmark yet, so no Fig. 1/2 bars) are left out of that figure only, and
+the figure says so.
+
+Terminology.  Two unrelated things were both called "CROSS" in earlier versions:
+*RC proximity* (Fig. 5: how close a forward fragment lies to the reverse-complement
+fragments of its own genome; higher is better) and *inter-order leakage* (Fig. 7: how
+often a fragment of one order retrieves a fragment of the other; lower is better).
+Column names of the committed CSVs keep the old names; titles and axes use these.
+
 Where the layer comes from.  Fig. 1 and 2 *are* the reference benchmark, so they
 show the best layer of that benchmark itself.  Fig. 4, 5 and 6 report every model
 at the layer the benchmark picked (selection.py) -- never at the layer that happens
@@ -16,8 +28,9 @@ import pandas as pd
 
 from .. import config, selection
 from ..metrics import reference, tables
+from .. import models as registry
 from ..models import Model
-from .style import color, display, load_table, order_of, save_figure, save_table
+from .style import color, display, load_table, save_figure, save_table
 
 VIRUSES = [("Egovirales_preproc", "Egovirales"),
            ("Mriyavirales_preproc", "Mriyavirales")]
@@ -35,6 +48,7 @@ def _reference_row(model: Model, filename: str, metrics_dir=None):
 # ── Fig. 1: reference benchmark, best layer of each model ───────────────────
 
 def build_fig1(models, metrics_dir=None) -> pd.DataFrame:
+    models = reference.available(models, metrics_dir=metrics_dir)
     frames = [reference.summary(models, metric, metrics_dir)
               for metric in reference.METRICS]
     frame = pd.concat(frames, ignore_index=True)
@@ -46,6 +60,7 @@ def draw_fig1(models):
     import matplotlib.pyplot as plt
 
     frame = load_table("fig1_reference_benchmark")
+    models = [model for model in models if model.key in set(frame["model"])]
     keys = [model.key for model in models]
     panels = [(metric, reference.METRIC_TITLES[metric]) for metric in reference.METRICS]
 
@@ -64,6 +79,10 @@ def draw_fig1(models):
         axis.set_ylabel("Score")
         axis.margins(y=0.15)
     figure.suptitle("Reference benchmark: best layer of each model", fontsize=15, y=1.04)
+    absent = [display(model.key) for model in registry.resolve() if model.key not in keys]
+    if absent:
+        figure.text(0.5, -0.04, "no reference benchmark computed for: " + ", ".join(absent),
+                    ha="center", fontsize=8, color="0.4")
     figure.tight_layout()
     save_figure(figure, "fig1_reference_benchmark", kind="main")
     plt.close(figure)
@@ -72,6 +91,7 @@ def draw_fig1(models):
 # ── Fig. 2: layer-wise ARI and P@5 ──────────────────────────────────────────
 
 def build_fig2(models, metrics_dir=None) -> pd.DataFrame:
+    models = reference.available(models, metrics_dir=metrics_dir)
     frame = pd.concat([reference.layerwise(models, metric, metrics_dir)
                        for metric in ("ARI", "P5")], ignore_index=True)
     save_table(frame, "fig2_layerwise")
@@ -101,7 +121,7 @@ def draw_fig2(models):
         axis.set_xlabel("Layer")
         axis.set_ylabel(title)
         axis.set_title(title)
-    axes[0].legend(loc="lower center", ncol=3, fontsize=9)
+    axes[0].legend(loc="lower center", ncol=4, fontsize=8)
     figure.suptitle("Clustering quality across transformer layers", fontsize=15, y=1.02)
     figure.tight_layout()
     save_figure(figure, "fig2_layerwise", kind="main")
@@ -124,6 +144,9 @@ def build_fig3(metrics_dir=None) -> pd.DataFrame | None:
 def draw_fig3():
     import matplotlib.pyplot as plt
 
+    if not (config.FIGURE_DATA / "fig3_kmer_sweep.csv").exists():
+        print("  fig3: no k-mer sweep summary, not drawn")
+        return
     frame = load_table("fig3_kmer_sweep").sort_values("k")
     series = [("ARI_mean", "ARI_std", "Adjusted Rand Index", "#0072B2"),
               ("P@5_mean", "P@5_std", "Precision@5", "#D55E00"),
@@ -145,15 +168,26 @@ def draw_fig3():
 
 # ── Fig. 4 and 5: the unseen orders ─────────────────────────────────────────
 
-def _unseen_table(models, groups, prefix, name, metrics_dir=None) -> pd.DataFrame:
+def _unseen_table(models, groups, prefix, name, metrics_dir=None, filename=None,
+                  optional=False) -> pd.DataFrame:
+    """Mean and spread over the reference samples of one table, at the reference layer.
+
+    ``optional`` tables (the order-level and own-RC metrics, which only exist after a
+    re-run) skip models that lack the file and are not written at all if none has it.
+    """
     rows = []
     for virus, label in groups:
         for model in models:
-            layer, values = _reference_row(
-                model, tables.matrix_name(prefix, config.PK_FOR_FIGURES, virus), metrics_dir)
+            table = filename(virus) if filename else tables.matrix_name(
+                prefix, config.PK_FOR_FIGURES, virus)
+            if optional and not (tables.model_dir(model, metrics_dir) / table).exists():
+                continue
+            layer, values = _reference_row(model, table, metrics_dir)
             rows.append({"group": label, "model": model.key, "layer": layer,
                          "mean": float(values.mean()), "std": float(values.std(ddof=0))})
     frame = pd.DataFrame(rows)
+    if optional and frame.empty:
+        return frame
     save_table(frame, name)
     return frame
 
@@ -166,8 +200,29 @@ def build_fig5(models, metrics_dir=None) -> pd.DataFrame:
     return _unseen_table(models, VIRUSES, "cross_P", "fig5_cross_p5", metrics_dir)
 
 
+def build_fig4b(models, metrics_dir=None) -> pd.DataFrame:
+    """Order-level P@5 (leave-genome-out): success = another genome of the same order."""
+    return _unseen_table(models, FIG4_GROUPS, "Porder", "fig4b_order_p5", metrics_dir,
+                         optional=True)
+
+
+def build_fig5b(models, metrics_dir=None) -> pd.DataFrame:
+    """Own-RC hit@5: the fragment's own reverse complement is among its 5 neighbours."""
+    return _unseen_table(models, VIRUSES, None, "fig5b_own_rc_hit5", metrics_dir,
+                         filename=lambda virus: tables.own_rc_names(config.PK_FOR_FIGURES, virus),
+                         optional=True)
+
+
+def build_fig5c(models, metrics_dir=None) -> pd.DataFrame:
+    """Mean similarity between a fragment and its own reverse complement."""
+    return _unseen_table(models, VIRUSES, None, "fig5c_own_rc_similarity", metrics_dir,
+                         filename=tables.own_rc_similarity_name, optional=True)
+
+
 def _grouped_bars(frame, models, order, ylabel, title, name):
     import matplotlib.pyplot as plt
+
+    models = [model for model in models if model.key in set(frame["model"])]
 
     figure, axis = plt.subplots(figsize=(10 if len(order) > 2 else 8, 4.8))
     width, positions = 0.8 / len(models), np.arange(len(order))
@@ -180,7 +235,7 @@ def _grouped_bars(frame, models, order, ylabel, title, name):
     axis.set_xticklabels(order)
     axis.set_ylabel(ylabel)
     axis.set_title(title)
-    axis.legend(ncol=min(len(models), 5), fontsize=9, loc="upper center",
+    axis.legend(ncol=min(len(models), 4), fontsize=9, loc="upper center",
                 bbox_to_anchor=(0.5, -0.12))
     figure.tight_layout()
     save_figure(figure, name, kind="main")
@@ -197,9 +252,35 @@ def draw_fig4(models):
 def draw_fig5(models):
     frame = load_table("fig5_cross_p5")
     _grouped_bars(frame, models, [label for _, label in VIRUSES],
-                  "Mean CROSS Precision@5",
-                  "Forward vs reverse-complement proximity (CROSS Precision@5)",
+                  "Mean RC-proximity Precision@5 (legacy 'CROSS P@5')",
+                  "RC proximity: share of the 5 nearest neighbours that are reverse-complement\n"
+                  "fragments of the SAME genome (not necessarily the fragment's own RC)",
                   "fig5_cross_p5")
+
+
+def _draw_optional(name, groups, models, ylabel, title):
+    path = config.FIGURE_DATA / f"{name}.csv"
+    if path.exists():
+        _grouped_bars(load_table(name), models, [label for _, label in groups],
+                      ylabel, title, name)
+
+
+def draw_fig4b(models):
+    _draw_optional("fig4b_order_p5", FIG4_GROUPS, models, "Mean order-level Precision@5",
+                   "Order-level P@5, leave-genome-out: neighbours from ANOTHER genome of\n"
+                   "the same unseen order (own genome excluded)")
+
+
+def draw_fig5b(models):
+    _draw_optional("fig5b_own_rc_hit5", VIRUSES, models, "Mean own-RC hit@5",
+                   "Own reverse complement among the 5 nearest neighbours")
+
+
+def draw_fig5c(models):
+    _draw_optional("fig5c_own_rc_similarity", VIRUSES, models,
+                   "Mean similarity of x and RC(x)",
+                   "Similarity of a fragment and its reverse complement\n"
+                   "(cosine / sketch agreement / 1 - JSD, by model)")
 
 
 # ── Fig. 6: P@k against k ───────────────────────────────────────────────────
@@ -235,7 +316,7 @@ def draw_fig6(models):
         axis.set_title(label)
         axis.set_xticks(list(config.KS))
     axes[0].set_ylabel("Precision@k")
-    axes[0].legend(fontsize=9, ncol=2)
+    axes[0].legend(fontsize=8, ncol=2)
     figure.suptitle("Precision@k as a function of k (unseen viruses)", fontsize=15, y=1.02)
     figure.tight_layout()
     save_figure(figure, "fig6_pk_vs_k", kind="main")
@@ -271,13 +352,14 @@ def draw_fig7(models):
 
     frame = load_table("fig7_pk_vs_cross")
     figure, axis = plt.subplots(figsize=(9, 6))
+    flat_markers = iter(["*", "P", "X", "D", "s", "^"])
     for model in models:
         data = frame[frame["model"] == model.key]
         if data.empty:
             continue
         flat = not model.layered
         axis.scatter(data["cross_p_at_10"], data["p_at_10"],
-                     marker="*" if flat else "o", s=260 if flat else 55,
+                     marker=next(flat_markers) if flat else "o", s=200 if flat else 55,
                      color=model.color, label=model.display,
                      edgecolor="white", linewidth=0.6, zorder=3)
         for _, row in data.iterrows():
@@ -285,8 +367,8 @@ def draw_fig7(models):
             if layer:
                 axis.annotate(layer, (row["cross_p_at_10"], row["p_at_10"]),
                               fontsize=7, xytext=(3, 3), textcoords="offset points")
-    axis.set_xlabel("CROSS Precision@10, Egovirales -> Mriyavirales "
-                    "(lower = better separation)")
+    axis.set_xlabel("Inter-order leakage: P@10 of Egovirales fragments retrieving "
+                    "Mriyavirales (lower = better separation)")
     axis.set_ylabel("Precision@10 within the own order (higher = denser cluster)")
     axis.set_title("Egovirales vs Mriyavirales: cluster compactness vs separation, per layer")
     axis.legend(title="Model")
@@ -300,6 +382,7 @@ def draw_fig7(models):
 BUILDERS = {
     "fig1": build_fig1, "fig2": build_fig2, "fig4": build_fig4,
     "fig5": build_fig5, "fig6": build_fig6, "fig7": build_fig7,
+    "fig4b": build_fig4b, "fig5b": build_fig5b, "fig5c": build_fig5c,
 }
 
 
@@ -313,7 +396,8 @@ def build_all(models, metrics_dir=None, which=None) -> None:
 
 
 def draw_all(models, which=None) -> None:
-    wanted = set(which or ["fig1", "fig2", "fig3", "fig4", "fig5", "fig6", "fig7"])
+    wanted = set(which or ["fig1", "fig2", "fig3", "fig4", "fig5", "fig6", "fig7",
+                           "fig4b", "fig5b", "fig5c"])
     if "fig1" in wanted:
         draw_fig1(models)
     if "fig2" in wanted:
@@ -328,3 +412,9 @@ def draw_all(models, which=None) -> None:
         draw_fig6(models)
     if "fig7" in wanted:
         draw_fig7(models)
+    if "fig4b" in wanted:
+        draw_fig4b(models)
+    if "fig5b" in wanted:
+        draw_fig5b(models)
+    if "fig5c" in wanted:
+        draw_fig5c(models)

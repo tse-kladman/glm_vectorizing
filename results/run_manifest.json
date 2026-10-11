@@ -1,0 +1,138 @@
+{
+  "git": {
+    "commit": "baaf0522ceef52ca3fe337f46fb18a2bd2706e29",
+    "dirty": true
+  },
+  "python": "3.12.3",
+  "platform": "Linux-6.6.87.2-microsoft-standard-WSL2-x86_64-with-glibc2.39",
+  "packages": {
+    "numpy": "2.5.4",
+    "pandas": "3.0.6",
+    "scipy": "1.18.1",
+    "scikit-learn": "1.9.1",
+    "matplotlib": "3.11.2",
+    "openpyxl": "3.1.5",
+    "biopython": "1.88",
+    "tqdm": "4.70.1",
+    "torch": null,
+    "transformers": null,
+    "datasets": null,
+    "tokenizers": null
+  },
+  "stages": [
+    {
+      "stage": "stats",
+      "time_utc": "2026-10-11T15:22:15+00:00",
+      "command_line": [
+        "run_pipeline.py",
+        "stats",
+        "--max-workers",
+        "1"
+      ],
+      "seeds": {
+        "seed": 42
+      },
+      "models": {
+        "kmer": {
+          "hf_name": null,
+          "revision": null,
+          "conda_env": null
+        },
+        "kmer_canon": {
+          "hf_name": null,
+          "revision": null,
+          "conda_env": null
+        },
+        "kmer_js": {
+          "hf_name": null,
+          "revision": null,
+          "conda_env": null
+        },
+        "minhash": {
+          "hf_name": null,
+          "revision": null,
+          "conda_env": null
+        },
+        "dnabert2": {
+          "hf_name": "zhihan1996/DNABERT-2-117M",
+          "revision": null,
+          "conda_env": null
+        },
+        "dnabertS": {
+          "hf_name": "zhihan1996/DNABERT-S",
+          "revision": null,
+          "conda_env": null
+        },
+        "viralm": {
+          "hf_name": null,
+          "revision": null,
+          "conda_env": "viralm"
+        },
+        "evo2": {
+          "hf_name": null,
+          "revision": null,
+          "conda_env": "evo2_env"
+        }
+      },
+      "extra": {}
+    },
+    {
+      "stage": "figures",
+      "time_utc": "2026-10-11T15:28:13+00:00",
+      "command_line": [
+        "run_pipeline.py",
+        "figures",
+        "--which",
+        "supplementary",
+        "--max-workers",
+        "1"
+      ],
+      "seeds": {
+        "seed": 42
+      },
+      "models": {
+        "kmer": {
+          "hf_name": null,
+          "revision": null,
+          "conda_env": null
+        },
+        "kmer_canon": {
+          "hf_name": null,
+          "revision": null,
+          "conda_env": null
+        },
+        "kmer_js": {
+          "hf_name": null,
+          "revision": null,
+          "conda_env": null
+        },
+        "minhash": {
+          "hf_name": null,
+          "revision": null,
+          "conda_env": null
+        },
+        "dnabert2": {
+          "hf_name": "zhihan1996/DNABERT-2-117M",
+          "revision": null,
+          "conda_env": null
+        },
+        "dnabertS": {
+          "hf_name": "zhihan1996/DNABERT-S",
+          "revision": null,
+          "conda_env": null
+        },
+        "viralm": {
+          "hf_name": null,
+          "revision": null,
+          "conda_env": "viralm"
+        },
+        "evo2": {
+          "hf_name": null,
+          "revision": null,
+          "conda_env": "evo2_env"
+        }
+      },
+      "extra": {}
+    }
+  ]
+}

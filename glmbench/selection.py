@@ -24,11 +24,12 @@ import numpy as np
 import pandas as pd
 from tqdm import tqdm
 
-from . import config, neighbours
+from . import config
 from .metrics import reference
 from .models import Model
 from .representations import kmer as kmer_repr
 from .representations import minhash as minhash_repr
+from .representations import store
 
 
 # ── the file that records the choice ────────────────────────────────────────
@@ -52,6 +53,15 @@ def record(model: Model, layer=None, k=None, score=None, chosen_by="", path=None
                             "chosen_by": chosen_by}
     save(selection, path)
     return selection
+
+
+def layer_label(model: Model, position: int):
+    """Label, in the extracted vectors and metric tables, of the layer at a benchmark
+    *position*.  ``selection.json`` stores positions; ViraLM's files are numbered
+    1..12 while its benchmark rows are 0..11, so position 2 is layer 3 there."""
+    if model.extractor == "viralm":
+        return list(store.VIRALM_LAYERS)[position]
+    return position
 
 
 def chosen_k(model: Model, path=None, default=None):
@@ -96,17 +106,12 @@ def row_of(model: Model, matrix, metric: str = config.REFERENCE_METRIC,
 
 def reference_precision(groups: dict, model: Model, k_neighbours: int = 5) -> float:
     """P@k inside one reference sample -- the same quantity that chooses the layer."""
-    space, labels = neighbours.stack(groups)
-    if space is None or len(labels) <= k_neighbours:
-        return float("nan")
-    matrix = neighbours.transform(space, model)
-    found = neighbours.knn(matrix, matrix, k_neighbours + 1, model)[:, 1:]
-    return neighbours.precision_at_ks(labels[found], labels, [k_neighbours])[k_neighbours]
+    return reference.precision_in_sample(groups, model, k_neighbours)
 
 
 def _score_one(packed):
     """One (word length, reference sample) pair; top level, for the process pool."""
-    model_key, k, index, reference_dir, k_neighbours = packed
+    model_key, k, index, reference_dir, k_neighbours, seed = packed
     from .models import get                      # re-imported inside the worker
 
     model = get(model_key)
@@ -115,18 +120,18 @@ def _score_one(packed):
         return k, index, float("nan")
 
     if model.extractor == "minhash":
-        groups = minhash_repr.from_fasta(path, k, model.sketch_size)
+        groups = minhash_repr.from_fasta(path, k, model.sketch_size, seed)
     else:
-        groups = kmer_repr.from_fasta(path, k)
+        groups = kmer_repr.from_fasta(path, k, model.canonical)
     return k, index, reference_precision(groups, model, k_neighbours)
 
 
 def sweep_k(model: Model, k_values=None, reference_dir=None, n_ref: int = 10,
-            k_neighbours: int = 5, max_workers=None):
+            k_neighbours: int = 5, max_workers=None, seed: int = config.SEED):
     """Score every candidate word length on reference samples; return the table."""
     k_values = list(k_values or model.k_values)
     reference_dir = str(reference_dir or config.REFERENCE_DIR)
-    tasks = [(model.key, k, index, reference_dir, k_neighbours)
+    tasks = [(model.key, k, index, reference_dir, k_neighbours, seed)
              for k in k_values for index in range(n_ref)]
 
     scores = {k: {} for k in k_values}
