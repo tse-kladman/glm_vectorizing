@@ -22,5 +22,17 @@
     "k": null,
     "score": 0.612645,
     "chosen_by": "reference P5"
+  },
+  "kmer_js": {
+    "layer": null,
+    "k": 4,
+    "score": 0.606908,
+    "chosen_by": "reference P@5 sweep"
+  },
+  "minhash": {
+    "layer": null,
+    "k": 6,
+    "score": 0.231073,
+    "chosen_by": "reference P@5 sweep"
   }
 }
