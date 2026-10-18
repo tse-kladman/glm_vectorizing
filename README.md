@@ -78,7 +78,7 @@ data/                 INPUTS ONLY -- what came from outside
 results/              EVERY NUMBER the analysis produces
     metrics/          per-sample metric tables (xlsx), one folder per model
     metrics/selection.json   the layer and word length chosen for each model
-    metrics/distance_protocols/  legacy P0-P3 tables (see results/README.md)
+    metrics/scaling_distance/    the same unseen-order tables under other feature scaling / distances
     metrics/legacy/   outputs of the old pipeline layout, kept for reference
     figure_data/      the exact numbers plotted in each figure (CSV, committed)
     statistics/       paired tests, genome-level bootstrap intervals (CSV)
@@ -120,9 +120,10 @@ in `glmbench/models.py` keeps the two together.
 | `kmer_canon` | **canonical** 4-mer profile (min of word and reverse complement; 136 entries) | standardised, cosine | -- |
 | `kmer_js` | k-mer frequency profile | Jensen-Shannon | word length *k* |
 | `minhash` | MinHash sketch of the canonical k-mer set | Jaccard estimate | word length *k* |
+| `minhash1k` | the same with sketch size 1024 instead of 128, k = 5..12 | Jaccard estimate | word length *k* |
 | `dnabert2` | DNABERT-2 embeddings | standardised, cosine | layer |
 | `dnabertS` | DNABERT-S embeddings | standardised, cosine | layer |
-| `viralm` | ViraLM embeddings | standardised, cosine | layer |
+| `viralm` | ViraLM embeddings (mean of the two 1 kb windows of a fragment) | standardised, cosine | layer |
 | `evo2` | Evo2-7B embeddings | standardised, cosine | layer |
 
 `kmer_canon` is the RC-invariant baseline against which the strand behaviour of the learned
@@ -205,6 +206,9 @@ Reference benchmark (`benchmark`; per layer and reference sample, cosine, standa
   against the true labels.
 * **P@5** -- of a fragment's 5 nearest neighbours (itself excluded **by index**), the share
   with its class.
+* **P5_lgo** -- P@5 with every fragment of the query's own genome excluded
+  (leave-genome-out; genome ids from `manifest_sample_<i>.tsv`, so only for samples drawn
+  by this code). Plain P@5 counts other pieces of the same genome as hits.
 * **Silhouette** -- cosine silhouette **of the true labels** (not of the K-medoids
   clustering).
 
@@ -271,6 +275,9 @@ install at `envs_for_glms/ViraLM/viralm_hook.py` and that runs in the `viralm` c
   `{key: 1-D numpy array}` with **one entry per window**, in FASTA order, where
   `key = "<FASTA record id>_<start>_<end>"` and the record id is `<label>_<index>`; the label
   is recovered by dropping the last three `_`-separated fields (`store._viralm_groups`);
+  the windows of one fragment (same record id) are **averaged into one vector**, so a
+  2 kb fragment is one point of the space as for every other model
+  (`store.VIRALM_WINDOWS = "windows"` restores the first release, one point per window);
 * keep the order of entries equal to the order of the FASTA records (the RC files are
   matched to the forward files by index).
 
@@ -301,6 +308,10 @@ are unchanged. On the GPU machine (commands in *Full reproduction*):
 | Pairwise (Fig. 7) tables | missing for `kmer_js`, `minhash`, `kmer_canon` (absent from Fig. 7) | `metrics` |
 | `kmer_canon` | no data at all | `extract --models kmer_canon`, `benchmark`, `metrics` |
 | Exclusion by index | tiny changes wherever fragments are duplicated | covered by the above |
+| ViraLM windows: each 2 kb fragment was two 1 kb points, the sister window counted as a hit | every `viralm` table (benchmark, selection, unseen P@k, CROSS, pairwise) | `benchmark --models viralm`, `select`, `metrics --models viralm --protocol both` (the pickles need no re-extraction) |
+| Leave-genome-out reference P@5 (`P5_lgo.xlsx`) | does not exist yet; needs the sample manifests | `benchmark` |
+| Jensen-Shannon K-medoids / silhouette use sqrt(JSD) (a metric) instead of JSD | `kmer_js` ARI and silhouette | `benchmark --models kmer_js` |
+| `minhash1k` (s = 1024) | no data at all | `select --models minhash1k`, `extract --models minhash1k`, `benchmark`, `metrics` |
 
 `results/figure_data`, `results/statistics` and `figures/` were rebuilt from the committed
 tables for the 7 models (see `results/README.md` for exactly what changed) and are stale as soon as any
@@ -311,20 +322,23 @@ row above is re-run.
 ## Figure numbering
 
 Repository numbering follows the order the pipeline draws the figures; the mapping to the
-article's figure numbers must be confirmed by the authors (TODO).
+article's figure numbers must be confirmed by the authors (TODO). Layers are numbered as in
+the extracted files everywhere (DNABERT-2/S: 0 = embeddings, 1..12 blocks; ViraLM: blocks
+1..12; Evo2: blocks 0..31); `selection.json` alone stores a benchmark *position*.
 
 | Repository | Content | Article |
 |------------|---------|---------|
-| Fig. 1 | reference benchmark, best layer per model (ARI, P@5, silhouette) | TODO |
-| Fig. 2 | layer-wise ARI and P@5 | TODO |
-| Fig. 3 | 4-mer word-length sweep | TODO |
+| Fig. 1 | reference benchmark, best layer per model (ARI, P@5; stars: vs the 4-mer profile) | TODO |
+| Fig. 2 | layer-wise ARI and P@5 (open markers: worse than the model's best layer) | TODO |
+| Fig. S1 | word-length sweep of the k-mer, Jensen-Shannon and MinHash baselines (formerly Fig. 3) | TODO |
 | Fig. 4 | unseen orders, P@5 (genome level), forward and RC | TODO |
 | Fig. 5 | RC proximity P@5 (legacy "CROSS P@5") | TODO |
-| Fig. 6 | P@k against k | TODO |
+| Fig. 6 | P@k against k (stars: leader vs runner-up) | TODO |
 | Fig. 7 | compactness vs inter-order leakage, per layer | TODO |
+| Fig. 8 | feature scaling and distance (P@5, unseen orders) | TODO |
 | Fig. 4b, 5b, 5c | order-level P@5; own-RC hit@5; own-RC similarity (new; appear after `metrics`) | -- |
 | `figures/statistics/` | significance plots | supplement |
-| `figures/supplementary/` | per layer plots; `distance_protocols` | supplement |
+| `figures/supplementary/` | per layer plots; `figS1_kmer_sweep` (k-mer length) | supplement |
 
 ## Tests
 

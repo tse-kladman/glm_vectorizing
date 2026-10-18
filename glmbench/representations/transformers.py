@@ -180,7 +180,15 @@ def check_viralm_hook() -> Path:
 
 def extract_viralm(model: Model, fasta_path: Path, name: str, latent_dir=None,
                    layers=None, batch_size=1) -> bool:
-    """ViraLM through its own hook, which writes one pickle per layer."""
+    """ViraLM through its own hook, which writes one pickle per layer.
+
+    ``batch_size`` must stay 1: the hook stores, per batch, the mean of the layer's
+    hidden states over axis 0 under the name of the batch's FIRST window -- with one
+    window per batch that is the mean over its tokens, with more it would silently
+    average different windows (and fragments) into one vector and drop the others.
+    """
+    if batch_size != 1:
+        raise ValueError("the ViraLM hook pools over the whole batch; batch_size must be 1")
     hook = check_viralm_hook()
     outdir = store.model_dir(model, latent_dir)
     outdir.mkdir(parents=True, exist_ok=True)

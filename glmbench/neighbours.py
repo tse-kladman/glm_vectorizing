@@ -258,7 +258,13 @@ def distance_matrix(matrix: np.ndarray, model: Model) -> np.ndarray:
 
     Used where a whole matrix is needed (clustering, silhouette).  For the cosine and
     Jensen-Shannon / MinHash metrics the ranking is the same as in :func:`knn`; the
-    values are cosine distance, JSD in bits, and 1 - sketch agreement.
+    values are cosine distance, the square root of JSD in bits, and 1 - sketch
+    agreement.
+
+    Why the square root for Jensen-Shannon: K-medoids and the silhouette average and
+    compare distances, so -- unlike the neighbour ranking -- they depend on the
+    values, and JSD itself does not satisfy the triangle inequality.  sqrt(JSD) is a
+    metric (Endres & Schindelin 2003).  The first release used JSD here.
     """
     if model.metric == "cosine":
         from sklearn.metrics import pairwise_distances
@@ -273,7 +279,7 @@ def distance_matrix(matrix: np.ndarray, model: Model) -> np.ndarray:
             mixture = (data[start:stop, None, :] + data[None, :, :]) * 0.5
             distances[start:stop] = (-_xlog2x(mixture).sum(axis=2)
                                      - 0.5 * (h[start:stop, None] + h[None, :]))
-        distances = np.maximum(distances, 0.0)
+        distances = np.sqrt(np.maximum(distances, 0.0))
     elif model.metric == "minhash":
         data = np.ascontiguousarray(matrix, dtype=np.uint64)
         distances = np.empty((len(data), len(data)), dtype=np.float64)

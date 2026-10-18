@@ -94,6 +94,18 @@ MINHASH = _register(Model(
     extractor="minhash", layered=False, k_values=(6, 7, 8, 9, 10), sketch_size=128,
 ))
 
+# The same sketch with s = 1024 instead of 128.  At k = 6 two unrelated 2 kb fragments
+# share J ~ 0.4 of their canonical words, and with s = 128 the standard error of the
+# estimate (~0.04) is as large as the difference between related and unrelated
+# fragments; s = 1024 cuts it to ~0.015.  The range of k is wider because the best
+# k = 6 of the s = 128 sketch lay at the edge of its range.
+MINHASH_1K = _register(Model(
+    key="minhash1k", display="MinHash (s=1024)", color="#F0E442",
+    kind="sketch", transform="none", metric="minhash",
+    extractor="minhash", layered=False, k_values=(5, 6, 7, 8, 9, 10, 11, 12),
+    sketch_size=1024,
+))
+
 # ── genomic language models ─────────────────────────────────────────────────
 
 DNABERT2 = _register(Model(
@@ -122,7 +134,8 @@ EVO2 = _register(Model(
 
 
 # Canonical order for figures and tables: baselines first, then the models.
-ORDER = ["kmer", "kmer_canon", "kmer_js", "minhash", "dnabert2", "dnabertS", "viralm", "evo2"]
+ORDER = ["kmer", "kmer_canon", "kmer_js", "minhash", "minhash1k",
+         "dnabert2", "dnabertS", "viralm", "evo2"]
 
 # The five models of the first release of the tables; kept so that the regression
 # tests can still reproduce those numbers exactly (the later additions -- MinHash,
