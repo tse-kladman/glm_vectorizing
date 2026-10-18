@@ -53,6 +53,9 @@ def special_match(strg, search=re.compile(r'[^ACGT]').search):
 
 
 def preprocee_data(input_pth, cache_dir, len_threshold, filename):
+    # ViraLM's own 1,000-nt windows: a 2,000-nt fragment gives two entries.  They are
+    # averaged back into one vector per fragment in glmbench/representations/store.py
+    # (_viralm_groups); scoring the windows as separate points inflates ViraLM's metrics.
     frag_len = 1000
     
     # Create file in cache_dir

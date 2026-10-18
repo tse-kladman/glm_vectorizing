@@ -19,7 +19,7 @@ floor 2/2^50 = 1.8e-15 whenever one model wins on every sample, so such values a
 "won every draw", not an estimate.  For uncertainty over genomes see
 ``bootstrap_ci_by_genome`` below.
 
-Corrections.  Within one panel, Holm over its ten pairs.  Across the study, Holm
+Corrections.  Within one panel, Holm over its pairs of models.  Across the study, Holm
 (family-wise) and Benjamini-Hochberg (false discovery rate) over the distinct
 comparisons -- distinct, because some panels read the same table and must not be
 counted twice.
@@ -32,8 +32,32 @@ import pandas as pd
 from scipy import stats
 
 
+def _finite_only(adjust):
+    """Apply a correction to the finite p-values only; NaN stays NaN in place.
+
+    A comparison that could not be made (no overlapping samples) has no p-value.  It
+    must neither count towards the size of the family nor -- through ``np.minimum`` /
+    ``np.maximum`` propagating NaN along the running extremum -- turn the adjusted
+    p-values of real comparisons into NaN.
+    """
+    def wrapped(p) -> np.ndarray:
+        p = np.asarray(p, dtype=float)
+        out = np.full(p.shape, np.nan)
+        finite = np.isfinite(p)
+        if finite.any():
+            out[finite] = adjust(p[finite])
+        return out
+    wrapped.__doc__ = adjust.__doc__
+    wrapped.__name__ = adjust.__name__
+    return wrapped
+
+
+@_finite_only
 def holm(p: np.ndarray) -> np.ndarray:
-    """Holm step-down adjusted p-values (controls the family-wise error rate)."""
+    """Holm step-down adjusted p-values (controls the family-wise error rate).
+
+    NaN entries are left out of the family and returned as NaN.
+    """
     order = np.argsort(p)
     adjusted = np.maximum.accumulate((len(p) - np.arange(len(p))) * p[order])
     out = np.empty_like(adjusted)
@@ -41,8 +65,12 @@ def holm(p: np.ndarray) -> np.ndarray:
     return out
 
 
+@_finite_only
 def benjamini_hochberg(p: np.ndarray) -> np.ndarray:
-    """BH step-up adjusted p-values (controls the false discovery rate)."""
+    """BH step-up adjusted p-values (controls the false discovery rate).
+
+    NaN entries are left out of the family and returned as NaN.
+    """
     n = len(p)
     order = np.argsort(p)
     adjusted = np.minimum.accumulate((n / np.arange(n, 0, -1)) * p[order][::-1])[::-1]
@@ -61,6 +89,9 @@ def rank_biserial(differences: np.ndarray) -> float:
 
 
 def stars(p: float) -> str:
+    """Significance mark of an (adjusted) p; '' when there is no p-value at all."""
+    if p is None or not np.isfinite(p):
+        return ""
     return "***" if p < 1e-3 else "**" if p < 1e-2 else "*" if p < 0.05 else "ns"
 
 
@@ -70,9 +101,18 @@ def wilcoxon_floor(n: int) -> float:
 
 
 def compare_pair(a_values: pd.Series, b_values: pd.Series) -> dict:
-    """One paired comparison: effect sizes and both raw p-values."""
+    """One paired comparison: effect sizes and both raw p-values.
+
+    The two series are aligned on their index (the reference-sample number), so a
+    sample missing from one side drops out of both.  No common sample at all gives
+    NaN p-values -- there is nothing to test, which is not the same as "no
+    difference" (identical values on every sample give p = 1).
+    """
     pair = pd.concat([a_values, b_values], axis=1, keys=["a", "b"]).dropna()
     differences = (pair["a"] - pair["b"]).to_numpy()
+    if not len(differences):
+        return {"n": 0, "mean_a": np.nan, "mean_b": np.nan, "mean_diff": np.nan,
+                "rank_biserial_r": np.nan, "p_wilcoxon": np.nan, "p_ttest": np.nan}
     return {
         "n": len(differences),
         "mean_a": pair["a"].mean(), "mean_b": pair["b"].mean(),

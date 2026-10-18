@@ -1,0 +1,43 @@
+group,model,variant,label,layer,mean,std,p_vs_main_bh
+Egovirales,kmer,standardized_cosine,"standardized, cosine",-,0.8145311475409837,0.013730690333252775,
+Egovirales,kmer,raw_cosine,"raw, cosine",-,0.7930491803278689,0.013755339047971292,1.3651694397664089e-09
+Egovirales,kmer,standardized_euclidean,"standardized, Euclidean",-,0.7840327868852459,0.013763815711888174,1.2724582528641133e-09
+Egovirales,kmer,raw_euclidean,"raw, Euclidean",-,0.7726032786885245,0.014453649053977516,1.2724582528641133e-09
+Egovirales,kmer_js,standardized_cosine,Jensen-Shannon,-,0.835311475409836,0.01142551212556191,1.4674439316790248e-09
+Egovirales,dnabert2,standardized_cosine,"standardized, cosine",3,0.7806163934426229,0.01351259517758216,
+Egovirales,dnabert2,raw_cosine,"raw, cosine",3,0.7528786885245902,0.014736753374704856,9.473903143468002e-15
+Egovirales,dnabert2,standardized_euclidean,"standardized, Euclidean",3,0.7429639344262295,0.014398477031351595,1.2724582528641133e-09
+Egovirales,dnabert2,raw_euclidean,"raw, Euclidean",3,0.7327016393442624,0.014542129069415528,1.2724582528641133e-09
+Egovirales,dnabertS,standardized_cosine,"standardized, cosine",4,0.8510229508196722,0.012103626736091206,
+Egovirales,dnabertS,raw_cosine,"raw, cosine",4,0.8293704918032787,0.012683074188383742,1.2724582528641133e-09
+Egovirales,dnabertS,standardized_euclidean,"standardized, Euclidean",4,0.7900983606557378,0.01305609833920735,1.2724582528641133e-09
+Egovirales,dnabertS,raw_euclidean,"raw, Euclidean",4,0.789855737704918,0.012975558028626754,1.2724582528641133e-09
+Egovirales,viralm,standardized_cosine,"standardized, cosine",3,0.8808263851528533,0.011287395577629991,
+Egovirales,viralm,raw_cosine,"raw, cosine",3,0.8466823529411767,0.010010085817228776,9.473903143468002e-15
+Egovirales,viralm,standardized_euclidean,"standardized, Euclidean",3,0.7919647374624281,0.011272728968516868,9.473903143468002e-15
+Egovirales,viralm,raw_euclidean,"raw, Euclidean",3,0.7966353538942179,0.010910240180440558,9.473903143468002e-15
+Egovirales,evo2,standardized_cosine,"standardized, cosine",26,0.7072327868852457,0.015786592101869536,
+Egovirales,evo2,raw_cosine,"raw, cosine",26,0.6556459016393442,0.01943817603196377,1.2724582528641133e-09
+Egovirales,evo2,standardized_euclidean,"standardized, Euclidean",26,0.6288065573770492,0.02069920069550873,1.2724582528641133e-09
+Egovirales,evo2,raw_euclidean,"raw, Euclidean",26,0.6045901639344262,0.020565506798367272,1.2724582528641133e-09
+Mriyavirales,kmer,standardized_cosine,"standardized, cosine",-,0.39812000000000003,0.019242864189673577,
+Mriyavirales,kmer,raw_cosine,"raw, cosine",-,0.4965466666666668,0.014714431313811933,9.473903143468002e-15
+Mriyavirales,kmer,standardized_euclidean,"standardized, Euclidean",-,0.48794000000000004,0.01686873373367953,1.2724582528641133e-09
+Mriyavirales,kmer,raw_euclidean,"raw, Euclidean",-,0.48499333333333333,0.016271514304998704,1.2724582528641133e-09
+Mriyavirales,kmer_js,standardized_cosine,Jensen-Shannon,-,0.52868,0.016935296474129606,1.2724582528641133e-09
+Mriyavirales,dnabert2,standardized_cosine,"standardized, cosine",3,0.46930666666666665,0.014347100365191863,
+Mriyavirales,dnabert2,raw_cosine,"raw, cosine",3,0.4587266666666667,0.01581303119441542,6.103725146557958e-09
+Mriyavirales,dnabert2,standardized_euclidean,"standardized, Euclidean",3,0.46778,0.016246518943385288,0.1982104703698822
+Mriyavirales,dnabert2,raw_euclidean,"raw, Euclidean",3,0.4522,0.016072198217902713,1.4884233307969704e-09
+Mriyavirales,dnabertS,standardized_cosine,"standardized, cosine",4,0.5652333333333333,0.01934094677677963,
+Mriyavirales,dnabertS,raw_cosine,"raw, cosine",4,0.5810533333333333,0.019926237309972308,1.5390966038678675e-09
+Mriyavirales,dnabertS,standardized_euclidean,"standardized, Euclidean",4,0.5662266666666667,0.019721780401936898,0.5462752110404765
+Mriyavirales,dnabertS,raw_euclidean,"raw, Euclidean",4,0.56706,0.019543534310183866,0.13319301818673573
+Mriyavirales,viralm,standardized_cosine,"standardized, cosine",3,0.4700917056530215,0.016822807681385565,
+Mriyavirales,viralm,raw_cosine,"raw, cosine",3,0.49163106237816767,0.015546898761018772,9.473903143468002e-15
+Mriyavirales,viralm,standardized_euclidean,"standardized, Euclidean",3,0.47177171052631584,0.015886692989679964,0.40069938068008665
+Mriyavirales,viralm,raw_euclidean,"raw, Euclidean",3,0.4782971247563353,0.015731925929354677,0.00011222171925148223
+Mriyavirales,evo2,standardized_cosine,"standardized, cosine",26,0.5559666666666666,0.027251116185091063,
+Mriyavirales,evo2,raw_cosine,"raw, cosine",26,0.5480999999999999,0.027004876102906552,0.001118147110858372
+Mriyavirales,evo2,standardized_euclidean,"standardized, Euclidean",26,0.5330866666666667,0.027241945598653575,5.5783616608024326e-08
+Mriyavirales,evo2,raw_euclidean,"raw, Euclidean",26,0.5159333333333332,0.026627805016561153,1.5390966038678675e-09
