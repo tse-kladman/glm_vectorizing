@@ -45,9 +45,9 @@ from .style import load_table, save_figure, save_table
 SELECTIONS = ("reference", "reference_split", "split", "in_sample", "oracle")
 PRIMARY = {"fig1": "split"}          # everything else uses "reference"
 PLOTTED = {
-    "fig1": ("Reference benchmark (Fig. 1)", 3),
-    "fig4": ("Generalisation to unseen orders (Fig. 4)", 2),
-    "fig5": ("RC proximity, forward vs reverse complement (Fig. 5)", 2),
+    "fig1": ("Reference benchmark", 3),
+    "fig4": ("Held-out viruses: Precision@5", 2),
+    "fig5": ("RC proximity, forward vs reverse complement", 2),
 }
 VIRUSES = [("Egovirales_preproc", "Egovirales"), ("Mriyavirales_preproc", "Mriyavirales")]
 
@@ -82,9 +82,13 @@ def best_row(matrix: pd.DataFrame, rule: str, model=None, metrics_dir=None):
 
 
 def _reference_panel(model, metric, rule, metrics_dir=None):
+    """The benchmark tables are indexed by position; the panel shows the layer label
+    (ViraLM: position + 1), as every other figure does."""
     matrix = reference_metrics.load(model, metric, metrics_dir)
-    layer, values = best_row(matrix, rule, model, metrics_dir)
-    return ("-" if not model.layered else layer), values
+    position, values = best_row(matrix, rule, model, metrics_dir)
+    if not model.layered:
+        return "-", values
+    return str(reference_metrics.layer_label(model, int(position))), values
 
 
 def _metric_panel(model, filename, rule, metrics_dir=None):

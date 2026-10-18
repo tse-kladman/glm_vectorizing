@@ -47,7 +47,7 @@ def set_root(root) -> Path:
     with ``spawn`` (Windows, macOS) import this module with the same root.
     """
     global ROOT, DATA, ICTV_DIR, UNSEEN_DIR, PREPROC_DIR, REFERENCE_DIR, LATENT_DIR
-    global RESULTS, METRICS, FIGURE_DATA, STATISTICS, SELECTION_FILE, MANIFEST_FILE, PROTOCOLS_DIR
+    global RESULTS, METRICS, FIGURE_DATA, STATISTICS, SELECTION_FILE, MANIFEST_FILE, SCALING_DISTANCE_DIR
     global FIGURES, FIG_MAIN, FIG_SUPP, FIG_STATS, FIG_EXPLORATORY, FIGURE_DIRS
 
     ROOT = Path(root).resolve()
@@ -67,12 +67,12 @@ def set_root(root) -> Path:
     FIGURE_DATA = RESULTS / "figure_data"          # the numbers plotted in each figure
     STATISTICS = RESULTS / "statistics"            # significance tests
     SELECTION_FILE = METRICS / "selection.json"    # chosen layer / word length per model
-    PROTOCOLS_DIR = METRICS / "distance_protocols"  # legacy P0..P3 tables (see results/README)
+    SCALING_DISTANCE_DIR = METRICS / "scaling_distance"  # same models, other scaling/distance
     MANIFEST_FILE = RESULTS / "run_manifest.json"  # what produced the numbers
 
     # ── plots ───────────────────────────────────────────────────────────────
     FIGURES = ROOT / "figures"
-    FIG_MAIN = FIGURES / "main"                    # Fig. 1-7 of the article
+    FIG_MAIN = FIGURES / "main"                    # Fig. 1, 2, 4-8 of the article
     FIG_SUPP = FIGURES / "supplementary"           # every layer of every metric
     FIG_STATS = FIGURES / "statistics"             # significance plots
     FIG_EXPLORATORY = FIGURES / "exploratory"
