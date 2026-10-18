@@ -1,6 +1,6 @@
 {
   "git": {
-    "commit": "4b3d6fbd9f509be914a3e4fa4221eb523ade8998",
+    "commit": "cd70a130059bc3ab085cc4c0dc3b067ffe313101",
     "dirty": true
   },
   "python": "3.12.11",
@@ -78,7 +78,7 @@
     },
     {
       "stage": "figures",
-      "time_utc": "2026-10-11T16:26:45+00:00",
+      "time_utc": "2026-10-11T17:33:19+00:00",
       "command_line": [
         "run_pipeline.py",
         "figures"
@@ -129,6 +129,68 @@
         }
       },
       "extra": {}
+    },
+    {
+      "stage": "extract",
+      "time_utc": "2026-10-18T18:31:27+00:00",
+      "command_line": [
+        "run_pipeline.py",
+        "extract",
+        "--models",
+        "kmer_js",
+        "minhash"
+      ],
+      "seeds": {
+        "seed": 42
+      },
+      "models": {
+        "kmer_js": {
+          "hf_name": null,
+          "revision": null,
+          "conda_env": null
+        },
+        "minhash": {
+          "hf_name": null,
+          "revision": null,
+          "conda_env": null
+        }
+      },
+      "extra": {
+        "n_ref": 50,
+        "pooling": "mean",
+        "k": null
+      }
+    },
+    {
+      "stage": "benchmark",
+      "time_utc": "2026-10-18T18:31:29+00:00",
+      "command_line": [
+        "run_pipeline.py",
+        "benchmark",
+        "--models",
+        "kmer_js",
+        "minhash",
+        "--force"
+      ],
+      "seeds": {
+        "seed": 42
+      },
+      "models": {
+        "kmer_js": {
+          "hf_name": null,
+          "revision": null,
+          "conda_env": null
+        },
+        "minhash": {
+          "hf_name": null,
+          "revision": null,
+          "conda_env": null
+        }
+      },
+      "extra": {
+        "n_ref": 50,
+        "allow_missing": false
+      }
     }
   ]
 }
