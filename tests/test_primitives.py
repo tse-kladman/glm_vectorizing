@@ -130,6 +130,13 @@ def test_layer_is_matched_by_position(monkeypatch):
     assert selection.layer_of(get("viralm"), matrix) == 3      # position 2 -> label 3
 
 
+def test_a_layer_that_is_nan_on_every_sample_is_never_chosen(monkeypatch):
+    """np.argmax returns the first NaN; the choice must agree with reference.summary."""
+    means = pd.Series([np.nan, 0.4, 0.7, 0.5])
+    monkeypatch.setattr(selection.reference, "layer_means", lambda *a, **k: means)
+    assert selection.choose_layer(get("dnabert2")) == 2
+
+
 def test_flat_model_needs_no_benchmark():
     matrix = pd.DataFrame({0: [0.5], 1: [0.6]}, index=["-"])
     assert selection.layer_of(KMER, matrix) == "-"
@@ -145,6 +152,26 @@ def test_holm_and_bh_are_monotone_and_bounded():
         assert adjusted.max() <= 1.0
 
 
+def test_corrections_leave_missing_p_values_out_of_the_family():
+    raw = np.array([0.01, np.nan, 0.04])
+    for correct, finite in ((statistics.holm, statistics.holm(np.array([0.01, 0.04]))),
+                            (statistics.benjamini_hochberg,
+                             statistics.benjamini_hochberg(np.array([0.01, 0.04])))):
+        adjusted = correct(raw)
+        assert np.isnan(adjusted[1])
+        np.testing.assert_allclose(adjusted[[0, 2]], finite)
+
+
+def test_compare_pair_without_common_samples_has_no_p_value():
+    a = pd.Series([0.1, 0.2], index=[0, 1])
+    b = pd.Series([0.3, 0.4], index=[2, 3])
+    result = statistics.compare_pair(a, b)
+    assert result["n"] == 0 and np.isnan(result["p_wilcoxon"])
+    assert statistics.stars(result["p_wilcoxon"]) == ""
+    same = statistics.compare_pair(a, a)
+    assert same["p_wilcoxon"] == 1.0                        # identical: no difference
+
+
 def test_holm_is_more_conservative_than_bh():
     raw = np.array([0.001, 0.01, 0.04, 0.2, 0.9])
     assert np.all(statistics.holm(raw) >= statistics.benjamini_hochberg(raw) - 1e-12)
@@ -153,3 +180,20 @@ def test_holm_is_more_conservative_than_bh():
 def test_rank_biserial_saturates_when_one_side_always_wins():
     assert statistics.rank_biserial(np.array([0.1, 0.2, 0.3])) == pytest.approx(1.0)
     assert statistics.rank_biserial(np.array([-0.1, -0.2])) == pytest.approx(-1.0)
+
+
+def test_the_larger_minhash_sketch_estimates_jaccard_closely():
+    """minhash1k exists to remove the sketch noise of s = 128 on 2 kb fragments."""
+    from glmbench import models as registry
+    from glmbench.representations import minhash as mh
+
+    model = registry.get("minhash1k")
+    assert model.sketch_size == 1024 and model in registry.resolve(["minhash1k"])
+    rng = np.random.default_rng(3)
+    x = "".join(rng.choice(list("ACGT"), 2000))
+    y = x[:1000] + "".join(rng.choice(list("ACGT"), 1000))
+    a, b = mh.hash_functions(model.sketch_size)
+    sx, sy = mh._canonical_codes(x, 6), mh._canonical_codes(y, 6)
+    exact = len(np.intersect1d(sx, sy)) / len(np.union1d(sx, sy))
+    estimate = mh.jaccard(mh.sketch(x, 6, a, b), mh.sketch(y, 6, a, b))
+    assert abs(estimate - exact) < 0.05

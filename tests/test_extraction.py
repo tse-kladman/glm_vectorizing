@@ -186,3 +186,14 @@ def test_the_viralm_hook_is_run_with_the_documented_command_line(tmp_path, monke
     for flag in ("--input_pth", "--output_pth", "--batch_size", "--layers_to_monitor"):
         assert flag in arguments
     assert arguments[arguments.index("--layers_to_monitor") + 1:] == [str(n) for n in range(1, 13)]
+    assert arguments[arguments.index("--batch_size") + 1] == "1"
+
+
+def test_the_viralm_hook_refuses_batches_it_would_average_together(tmp_path, monkeypatch):
+    """The hook stores np.mean(states, axis=0) per batch under the batch's first name:
+    with more than one window per batch, different fragments would be merged."""
+    monkeypatch.setattr(transformers, "_conda",
+                        lambda *a, **k: pytest.fail("the hook must not be started"))
+    with pytest.raises(ValueError, match="batch_size must be 1"):
+        transformers.extract_viralm(models.get("viralm"), tmp_path / "s.fa", "s",
+                                    tmp_path / "l", batch_size=8)

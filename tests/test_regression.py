@@ -35,6 +35,12 @@ def _write_elsewhere(tmp_path, monkeypatch):
     monkeypatch.setattr(config, "FIGURE_DATA", tmp_path)
 
 
+# Columns whose value depends on which models are compared together (the test of the
+# leading model against the second one at each k): rebuilt from the five original
+# models they legitimately differ from the committed seven-model table.
+ACROSS_MODELS = {"leader_vs_second_bh"}
+
+
 def committed(name: str) -> pd.DataFrame:
     path = config.ROOT / "results" / "figure_data" / f"{name}.csv"
     if not path.exists():
@@ -60,6 +66,8 @@ def test_rebuilds_the_committed_numbers(name):
     assert len(rebuilt) == len(expected), f"{name}: row count changed"
 
     for column in expected.columns:
+        if column in ACROSS_MODELS:
+            continue
         if pd.api.types.is_numeric_dtype(expected[column]):
             pd.testing.assert_series_equal(
                 rebuilt[column].astype(float), expected[column].astype(float),

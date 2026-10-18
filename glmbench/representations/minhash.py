@@ -6,11 +6,19 @@ fragments by the Jaccard index of those sets.
 
 Each k-mer is packed two bits per letter, folded to its canonical form
 ``min(kmer, revcomp(kmer))`` -- which makes a sketch identical for a fragment and
-its reverse complement, by construction -- mixed with a 64-bit hash, and passed
-through s independent universal hash functions ``h_i(x) = (a_i*x + b_i) mod p``.
-The sketch is the vector of s minima.  The probability that two sets share a
-minimum under one hash function equals their Jaccard index, so the fraction of
-agreeing positions estimates it without bias.
+its reverse complement, by construction -- mixed with the 64-bit MurmurHash3
+finaliser (fmix64) and cut to its lower 31 bits, and passed through s universal hash
+functions ``h_i(x) = (a_i*x + b_i) mod p`` with p = 2^31 - 1.  The sketch is the vector
+of s minima.  Under a min-wise independent permutation the probability that two sets
+share a minimum equals their Jaccard index J; linear hash functions are only
+approximately min-wise independent, so the fraction of agreeing positions estimates J
+approximately, with standard error about sqrt(J(1-J)/s) (0.044 at J = 0.5, s = 128).
+
+The sketch size matters for 2 kb fragments: two unrelated fragments already share
+J ~ 0.4 of their canonical 6-mers, so with s = 128 the estimate is about as noisy as
+the difference between related and unrelated fragments.  ``models.MINHASH_1K`` is the
+same representation with s = 1024 and a wider range of k, to show how much of the
+weakness of MinHash here is the sketch size.
 
 All files of one run must share ``seed``: sketches are only comparable under the
 same hash functions.
@@ -47,7 +55,9 @@ def _canonical_codes(sequence: str, k: int) -> np.ndarray:
 
 
 def _mix64(values: np.ndarray) -> np.ndarray:
-    """splitmix64 finaliser, so neighbouring k-mers do not get neighbouring hashes."""
+    """MurmurHash3 fmix64 finaliser, cut to the lower 31 bits, so neighbouring k-mers
+    do not get neighbouring hashes.  (Earlier comments called this splitmix64; the
+    constants and the 33-bit shifts are those of fmix64.)"""
     with np.errstate(over="ignore"):
         x = values.astype(np.uint64)
         x ^= x >> np.uint64(33)

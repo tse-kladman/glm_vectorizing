@@ -247,7 +247,8 @@ def stage_select(args) -> None:
                                       max_workers=args.max_workers, seed=args.seed)
             means = table.mean(axis=1, skipna=True)
             best = int(means.idxmax())
-            path = (config.METRICS / "k_sweep" / f"{model.key}_k_sweep.xlsx")
+            path = (Path(args.metrics_dir or config.METRICS) / "k_sweep"
+                    / f"{model.key}_k_sweep.xlsx")
             path.parent.mkdir(parents=True, exist_ok=True)
             table.to_excel(path)
             for k, score in means.items():
@@ -319,6 +320,12 @@ def stage_figures(args) -> None:
     style.set_style()
     wanted = {"main", "supplementary", "statistics"} if args.which == "all" else {args.which}
 
+    # The study-wide test table is built FIRST: the marks of Fig. 4-6 are read from
+    # it, so building the main figures before it would draw them from the previous
+    # run's table (stale, or for other models).
+    samples = tests = None
+    if not args.plot_only and wanted & {"main", "statistics"}:
+        samples, tests = statistics_figures.build(chosen_models, args.metrics_dir)
     if "main" in wanted:
         if not args.plot_only:
             main_figures.build_all(chosen_models, args.metrics_dir)
@@ -328,9 +335,6 @@ def stage_figures(args) -> None:
             supplementary_figures.build_all(chosen_models, args.metrics_dir)
         supplementary_figures.draw_all(chosen_models, args.metrics_dir)
     if "statistics" in wanted:
-        samples = tests = None
-        if not args.plot_only:
-            samples, tests = statistics_figures.build(chosen_models, args.metrics_dir)
         statistics_figures.draw_all(chosen_models, samples, tests)
 
 

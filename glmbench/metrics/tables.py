@@ -28,9 +28,6 @@ from ..models import Model
 
 FLAT_LAYER = "-"      # the layer label of a model that has no layers
 
-PROTOCOL_PREFIX = {"genome": "P", "order": "Porder"}
-PROTOCOLS = ("genome", "order")
-
 
 def model_dir(model: Model | str, metrics_dir: Path | None = None) -> Path:
     key = model if isinstance(model, str) else model.key

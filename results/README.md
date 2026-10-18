@@ -6,7 +6,7 @@ README for what each metric measures and for which tables are stale after the co
 ```
 metrics/                 per-sample metric tables, one folder per model
 metrics/selection.json   the layer and word length chosen for each model
-metrics/distance_protocols/   legacy P0-P3 tables (moved from data/metrics, see below)
+metrics/scaling_distance/     unseen-order tables under other feature scaling / distances (see below)
 metrics/legacy/          legacy outputs kept for reference (see below)
 figure_data/             the exact numbers plotted in each figure (CSV)
 statistics/              paired tests, genome-level bootstrap intervals (CSV)
@@ -29,7 +29,7 @@ columns are the 50 reference samples (`sample_<i>`).
 | `<model>/per_genome_<kind>_<virus>.csv.gz` | the same per genome (k = 5, 10): `layer, sample, genome, metric, value`; `kind` = `genome`, `order`, `cross`, `ownrc` -- new |
 | `<model>/pairwise_<A>_vs_<B>/` | one unseen order against the other (**inter-order leakage**, Fig. 7) |
 | `k_sweep/<model>_k_sweep.xlsx` | the word-length sweep that chose `k` |
-| `kmer_sweep/` | the 4-mer sweep behind Fig. 3 |
+| `kmer_sweep/` | the k-mer (cosine) word-length sweep behind Fig. S1 |
 | `selection.json` | the chosen layer (a benchmark *position*) and word length of each model |
 
 Models present on disk today: `kmer`, `dnabert2`, `dnabertS`, `viralm`, `evo2` (full: benchmark,
@@ -43,8 +43,8 @@ no pairwise). Absent: `kmer_canon`. All of these were produced before the code f
 
 | Old location | New location | Note |
 |--------------|--------------|------|
-| `data/metrics/P0..P3/<model>/` | `metrics/distance_protocols/P0..P3/<model>/` | the 4-mer profile and the four models under standardise/raw x cosine/Euclidean. P0 equals the main tables of `kmer` (checked: 0.8145 for Egovirales P@5). Used by `figures/supplementary/distance_protocols.png` for the k-mer profile |
-| `data/metrics/P4/kmer`, `P5/kmer` | `metrics/distance_protocols/P4/kmer`, `P5/kmer` | k-mer profile under the old P4/P5 code paths; kept, not used |
+| `data/metrics/P1..P3/<model>/` | `metrics/scaling_distance/{raw_cosine,standardized_euclidean,raw_euclidean}/<model>/` | the 4-mer profile and the four models with raw or standardized features and the cosine or Euclidean distance. Standardized features with the cosine distance are the main tables `metrics/<model>/` (the former copy was identical up to column order and was removed). Used by `figures/main/fig8_scaling_distance.png` |
+| `data/metrics/P4/kmer`, `P5/kmer` | **deleted** | k-mer profile under old code paths, never used; MinHash and Jensen-Shannon are the models `minhash` and `kmer_js` |
 | `data/metrics/P4/minhash_k6`, `P5/kmer_k4` | **deleted** | identical copies of `metrics/minhash` and `metrics/kmer_js` (verified with `diff -r` before the move) |
 | `data/metrics/k_sweep/` | `metrics/legacy/k_sweep/` | older sweep on a different random subset of samples; `best_k.json` agrees with `selection.json` (js 4, minhash 6) |
 | `data/metrics/metric_axis_summary.xlsx`, `p@k_for_k/*.parquet` | `metrics/legacy/` | |
@@ -63,15 +63,16 @@ numbering is to be confirmed (main README).
 
 | Figure | What it shows | File | Columns |
 |--------|---------------|------|---------|
-| Fig. 1 | best layer of each model: ARI, P@5, silhouette | `fig1_reference_benchmark.csv` | `metric, model, best_layer, mean, std` |
-| Fig. 2 | ARI and P@5 across all layers | `fig2_layerwise.csv` | `metric, model, layer, mean, std` |
-| Fig. 3 | 4-mer baseline against word length k | `fig3_kmer_sweep.csv` | `k, P@5_mean, ...` |
-| Fig. 4 | unseen orders, **genome-level** P@5, forward and RC | `fig4_newvirus_p5.csv` | `group, model, layer, mean, std` |
-| Fig. 5 | **RC proximity** P@5 (file keeps the legacy name `cross`) | `fig5_cross_p5.csv` | `group, model, layer, mean, std` |
-| Fig. 6 | P@k against k | `fig6_pk_vs_k.csv` | `virus, model, k, layer, mean` |
+| Fig. 1 | best layer of each model: ARI, P@5 | `fig1_reference_benchmark.csv` | `metric, model, best_layer, mean, std, p_vs_kmer_bh` |
+| Fig. 2 | ARI and P@5 across all layers | `fig2_layerwise.csv` | `metric, model, layer, mean, std, p_vs_best_bh` |
+| Fig. S1 | k-mer length sweep of the 4-mer, Jensen-Shannon and MinHash baselines | `supplementary/figS1_kmer_sweep.csv` | `method, metric, k, mean, std, n, best, p_vs_best_bh` |
+| Fig. 4 | unseen orders, **genome-level** P@5, forward and RC | `fig4_newvirus_p5.csv` | `group, model, layer, mean, std, p_vs_kmer_bh` |
+| Fig. 5 | **RC proximity** P@5 (file keeps the legacy name `cross`) | `fig5_cross_p5.csv` | `group, model, layer, mean, std, p_vs_kmer_bh` |
+| Fig. 6 | P@k against k | `fig6_pk_vs_k.csv` | `virus, model, k, layer, mean, leader_vs_second_bh` |
 | Fig. 7 | per layer: own-genome density against **inter-order leakage** (columns keep the old `cross_p_at_10`) | `fig7_pk_vs_cross.csv` | `model, layer, p_at_10, cross_p_at_10` |
 | Fig. 4b / 5b / 5c | order-level P@5 / own-RC hit@5 / own-RC similarity -- written only once `metrics` has produced the new tables | `fig4b_order_p5.csv`, `fig5b_own_rc_hit5.csv`, `fig5c_own_rc_similarity.csv` | as Fig. 4 |
-| supplementary | per-layer tables; distance protocols | `supplementary/layerwise_reference.csv`, `layerwise_newvirus_p5.csv`, `protocol_comparison.csv` | |
+| Fig. 8 | P@5 on the unseen orders under four scaling/distance variants | `supplementary/scaling_distance.csv` | `group, model, variant, label, layer, mean, std, p_vs_main_bh` |
+| supplementary | per-layer tables; scaling and distance; early Evo2 layer | `supplementary/layerwise_reference.csv`, `layerwise_newvirus_p5.csv`, `scaling_distance.csv`, `evo2_early_layer.csv` | |
 
 **What changed in the committed CSVs with this release** (rebuilt from the same committed
 metric tables, no new computation): Fig. 4, 5, 6 now also contain `kmer_js` and `minhash`
@@ -79,7 +80,14 @@ metric tables, no new computation): Fig. 4, 5, 6 now also contain `kmer_js` and 
 five original models, because MinHash and k-mer JS have no reference benchmark and no
 pairwise tables yet (the figures state this). The numbers of the original five models are
 unchanged -- `tests/test_regression.py` pins them. Fig. 5 and the statistics panels were
-renamed "RC proximity" (labels only). `supplementary/protocol_comparison.csv` is new.
+renamed "RC proximity" (labels only). `supplementary/scaling_distance.csv` replaces the former distance-protocol table.
+
+`p_*_bh` columns are Benjamini-Hochberg adjusted p-values of the two-sided paired Wilcoxon
+test over the reference samples (`glmbench/figures/significance.py`): Fig. 4-6 take them
+from `statistics/pairwise_model_tests.csv` (selection `reference`, study-wide family), the
+other figures form one family per figure. `layer` / `best_layer` are layer *labels* as in
+the extracted files -- ViraLM's blocks are 1..12, so its benchmark position 2 is shown as
+layer 3 in every figure (Fig. 1/2 showed the position before; the scores are unchanged).
 
 Fig. 4, 5 and 6 report each model at the layer chosen by its **reference benchmark**, not at
 the layer that scores best on the unseen order; the `layer` column says which one. Fig. 1 and

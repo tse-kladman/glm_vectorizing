@@ -29,7 +29,6 @@ from .metrics import reference
 from .models import Model
 from .representations import kmer as kmer_repr
 from .representations import minhash as minhash_repr
-from .representations import store
 
 
 # ── the file that records the choice ────────────────────────────────────────
@@ -58,10 +57,9 @@ def record(model: Model, layer=None, k=None, score=None, chosen_by="", path=None
 def layer_label(model: Model, position: int):
     """Label, in the extracted vectors and metric tables, of the layer at a benchmark
     *position*.  ``selection.json`` stores positions; ViraLM's files are numbered
-    1..12 while its benchmark rows are 0..11, so position 2 is layer 3 there."""
-    if model.extractor == "viralm":
-        return list(store.VIRALM_LAYERS)[position]
-    return position
+    1..12 while its benchmark rows are 0..11, so position 2 is layer 3 there.
+    (One implementation: ``reference.layer_label``.)"""
+    return reference.layer_label(model, position)
 
 
 def chosen_k(model: Model, path=None, default=None):
@@ -73,9 +71,13 @@ def chosen_k(model: Model, path=None, default=None):
 
 def choose_layer(model: Model, metric: str = config.REFERENCE_METRIC,
                  metrics_dir=None, samples=None) -> int:
-    """Positional index of the layer the reference benchmark ranks first."""
+    """Positional index of the layer the reference benchmark ranks first.
+
+    ``nanargmax``, as in ``reference.summary``: ``np.argmax`` returns the position of
+    the first NaN, so a layer that is NaN on every (selected) sample would be chosen.
+    """
     means = reference.layer_means(model, metric, metrics_dir, samples)
-    return int(np.argmax(means.to_numpy()))
+    return int(np.nanargmax(means.to_numpy(dtype=float)))
 
 
 def layer_of(model: Model, matrix, metric: str = config.REFERENCE_METRIC,
