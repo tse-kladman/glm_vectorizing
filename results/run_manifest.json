@@ -38,11 +38,6 @@
           "revision": null,
           "conda_env": null
         },
-        "kmer_canon": {
-          "hf_name": null,
-          "revision": null,
-          "conda_env": null
-        },
         "kmer_js": {
           "hf_name": null,
           "revision": null,
@@ -88,11 +83,6 @@
       },
       "models": {
         "kmer": {
-          "hf_name": null,
-          "revision": null,
-          "conda_env": null
-        },
-        "kmer_canon": {
           "hf_name": null,
           "revision": null,
           "conda_env": null

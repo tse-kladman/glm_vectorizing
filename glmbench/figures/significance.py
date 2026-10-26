@@ -43,11 +43,6 @@ def adjust(raw: dict) -> dict:
     return dict(zip(keys, adjusted))
 
 
-def marks(adjusted: dict) -> dict:
-    """{key: adjusted p} -> {key: '***' | '**' | '*' | 'ns'}."""
-    return {key: statistics.stars(p) for key, p in adjusted.items()}
-
-
 # ── the study-wide table (Fig. 4-6) ─────────────────────────────────────────
 
 def study_tests(selection: str = "reference", statistics_dir=None) -> pd.DataFrame:

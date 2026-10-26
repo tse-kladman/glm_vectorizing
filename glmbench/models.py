@@ -18,7 +18,7 @@ the transformers tune their layer there instead.  Nothing is ever tuned on the
 unseen orders.
 """
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 
 @dataclass(frozen=True)
@@ -36,18 +36,13 @@ class Model:
     fixed_k: int | None = None       # word length, when it is not tuned
     k_values: tuple = ()             # word lengths tried on the reference set
     sketch_size: int = 0             # MinHash only
-    canonical: bool = False          # k-mer profile over canonical k-mers (RC-invariant)
-    revision: str | None = None      # HuggingFace commit / release pinned for the run;
-                                     # None = whatever the hub served (recorded in the
-                                     # run manifest only if you set it, so set it)
+    revision: str | None = None      # HuggingFace commit of the in-process transformers
+                                     # (weights AND their remote code); recorded in the
+                                     # run manifest.  Evo2 and ViraLM: see the README
 
     @property
     def tunes_k(self) -> bool:
         return bool(self.k_values)
-
-    @property
-    def tunes_layer(self) -> bool:
-        return self.layered
 
 
 MODELS: dict[str, Model] = {}
@@ -72,16 +67,6 @@ KMER = _register(Model(
     extractor="kmer", layered=False, fixed_k=4,
 ))
 
-# The same profile, but over canonical k-mers: every word is replaced by
-# min(word, reverse complement) before counting, so the profile of a fragment and of
-# its reverse complement are identical by construction.  It is the RC-invariant
-# baseline against which the reverse-complement behaviour of the learned models is read.
-KMER_CANON = _register(Model(
-    key="kmer_canon", display="k-mer (canonical)", color="#000000",
-    kind="distribution", transform="standardize", metric="cosine",
-    extractor="kmer", layered=False, fixed_k=4, canonical=True,
-))
-
 KMER_JS = _register(Model(
     key="kmer_js", display="k-mer (JS)", color="#56B4E9",
     kind="distribution", transform="none", metric="jensenshannon",
@@ -94,30 +79,20 @@ MINHASH = _register(Model(
     extractor="minhash", layered=False, k_values=(6, 7, 8, 9, 10), sketch_size=128,
 ))
 
-# The same sketch with s = 1024 instead of 128.  At k = 6 two unrelated 2 kb fragments
-# share J ~ 0.4 of their canonical words, and with s = 128 the standard error of the
-# estimate (~0.04) is as large as the difference between related and unrelated
-# fragments; s = 1024 cuts it to ~0.015.  The range of k is wider because the best
-# k = 6 of the s = 128 sketch lay at the edge of its range.
-MINHASH_1K = _register(Model(
-    key="minhash1k", display="MinHash (s=1024)", color="#F0E442",
-    kind="sketch", transform="none", metric="minhash",
-    extractor="minhash", layered=False, k_values=(5, 6, 7, 8, 9, 10, 11, 12),
-    sketch_size=1024,
-))
-
 # ── genomic language models ─────────────────────────────────────────────────
 
 DNABERT2 = _register(Model(
     key="dnabert2", display="DNABERT-2", color="#0072B2",
     kind="vector", transform="standardize", metric="cosine",
     extractor="bert", layered=True, hf_name="zhihan1996/DNABERT-2-117M",
+    revision="7bce263b15377fc15361f52cfab88f8b586abda0",
 ))
 
 DNABERTS = _register(Model(
     key="dnabertS", display="DNABERT-S", color="#E69F00",
     kind="vector", transform="standardize", metric="cosine",
     extractor="bert", layered=True, hf_name="zhihan1996/DNABERT-S",
+    revision="00e47f96cdea35e4b6f5df89e5419cbe47d490c6",
 ))
 
 VIRALM = _register(Model(
@@ -134,13 +109,32 @@ EVO2 = _register(Model(
 
 
 # Canonical order for figures and tables: baselines first, then the models.
-ORDER = ["kmer", "kmer_canon", "kmer_js", "minhash", "minhash1k",
-         "dnabert2", "dnabertS", "viralm", "evo2"]
+ORDER = ["kmer", "kmer_js", "minhash", "dnabert2", "dnabertS", "viralm", "evo2"]
 
-# The five models of the first release of the tables; kept so that the regression
-# tests can still reproduce those numbers exactly (the later additions -- MinHash,
-# Jensen-Shannon, canonical k-mers -- are tested separately).
+# The language models and the 4-mer baseline whose committed tables the regression
+# tests rebuild exactly (the other baselines are tested separately).
 PUBLISHED = ["kmer", "dnabert2", "dnabertS", "viralm", "evo2"]
+
+
+# The scaling/distance check of Fig. 8: the models compared by standardised cosine,
+# scored again under the three other combinations of feature scaling and distance.
+# The tables go to ``results/metrics/scaling_distance/<variant>/<model>/``.
+SCALING_DISTANCE = {
+    "raw_cosine": ("none", "cosine"),
+    "standardized_euclidean": ("standardize", "euclidean"),
+    "raw_euclidean": ("none", "euclidean"),
+}
+
+
+def variant(model: Model, name: str | None) -> Model:
+    """The same model under another (transform, distance) pair; ``None`` = unchanged."""
+    if name is None:
+        return model
+    if model.metric != "cosine" or model.transform != "standardize":
+        raise ValueError(f"{model.key}: the scaling/distance variants apply only to the "
+                         f"models compared by standardised cosine")
+    transform, metric = SCALING_DISTANCE[name]
+    return replace(model, transform=transform, metric=metric)
 
 
 def get(key: str) -> Model:

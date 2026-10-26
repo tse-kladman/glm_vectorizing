@@ -24,6 +24,9 @@ compare_pk.ipynb
 /data/random_samples/
 /data/latent_dim/
 
+# Third-party model files (see README, section "ViraLM")
+/envs_for_glms/ViraLM/model/
+
 # Large inputs and logs that are not shipped with the repository
 all_ictv_viruses_v1.fasta
 activations_debug.log

@@ -6,8 +6,7 @@ Two complementary questions about a pair of orders A and B:
                        fragment retrieve a B fragment?  Lower is better: the two
                        orders are well separated.  (Called "inter-order leakage" in
                        the docs; unrelated to the fwd<->RC "RC proximity" of
-                       unseen.precision_rc_proximity, which was also once called
-                       "CROSS" and for which HIGHER is better.)
+                       unseen.precision_rc_proximity, for which HIGHER is better.)
 
     precision_with_other  space = reference + B + A, query = one genome (label) of A.
                        Does the genome still find itself when B shares the space?
@@ -16,22 +15,15 @@ Two complementary questions about a pair of orders A and B:
                        not an order-level quantity.  Higher is better.
 
 Together they place a model on the compactness/separation plane of Fig. 7; the
-ideal sits top-left.  Unlike unseen.precision, cross_between treats all fragments
-of the target as a single class, because the question is about orders, not labels.
+ideal sits top-left.  Unlike unseen.precision_by_genome, cross_between treats all
+fragments of the target as a single class, because the question is about orders, not
+genomes.
 """
 
 import numpy as np
 
 from .. import neighbours
 from ..models import Model
-
-# the twelve strand/direction combinations written per pair of orders
-COMBINATIONS = [
-    "cross_1→2_fwd_rc", "cross_1→2_rc_fwd", "cross_1→2_fwd_fwd", "cross_1→2_rc_rc",
-    "cross_2→1_fwd_rc", "cross_2→1_rc_fwd", "cross_2→1_fwd_fwd", "cross_2→1_rc_rc",
-    "pk_fwd_1_in_2", "pk_rc_1_in_2", "pk_fwd_2_in_1", "pk_rc_2_in_1",
-]
-
 
 def cross_between(reference: dict, query: dict, target: dict, k: int, model: Model) -> float:
     """Fraction of a query order's k neighbours that belong to the target order."""
@@ -85,7 +77,7 @@ def precision_with_other(reference: dict, query: dict, other: dict, k: int,
 
 def all_combinations(reference: dict, forward_a: dict, reverse_a: dict,
                      forward_b: dict, reverse_b: dict, k: int, model: Model) -> dict:
-    """Every strand/direction combination of one pair, for one reference sample."""
+    """The twelve strand/direction combinations of one pair, for one reference sample."""
     return {
         "cross_1→2_fwd_rc": cross_between(reference, forward_a, reverse_b, k, model),
         "cross_1→2_rc_fwd": cross_between(reference, reverse_a, forward_b, k, model),

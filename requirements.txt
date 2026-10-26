@@ -1,26 +1,28 @@
 # Everything except the two models that need their own environment.
 #
-#   pip install -r requirements.txt
+#   pip install -r requirements.txt          (Python >= 3.10)
 #
-# Lower bounds are the versions the test suite was last run with (Python 3.12.3):
-# older versions are untested, newer ones are expected to work.  The exact versions
-# of a real run are written to results/run_manifest.json.
+# Lower bounds are the versions the published tables were computed with (Python 3.12,
+# see results/run_manifest.json); the test suite also passes with the current releases
+# (numpy 2.5, pandas 3.0, Python 3.14).  The exact versions of a run are written to
+# results/run_manifest.json.
 #
-# CPU-only work (tests, k-mer / MinHash / Jensen-Shannon / canonical baselines, the
-# reference benchmark, statistics, figures) needs only this first block.
+# CPU-only work (tests, the k-mer / Jensen-Shannon / MinHash baselines, the reference
+# benchmark, statistics, figures) needs only this first block.
 
-numpy>=2.5.4
-pandas>=3.0.6
-scipy>=1.18.1
-scikit-learn>=1.9.1      # nearest neighbours, silhouette, ARI (K-medoids is in-package)
-matplotlib>=3.11.2
+numpy>=1.26.4
+pandas>=2.3.2
+scipy>=1.16.1
+scikit-learn>=1.7.1      # nearest neighbours, silhouette, ARI (K-medoids is in-package)
+matplotlib>=3.10.6
 openpyxl>=3.1.5          # pandas reads/writes the .xlsx metric tables through it
-biopython>=1.88          # FASTA parsing
-tqdm>=4.70.1
-pytest>=9.1.1
+biopython>=1.85          # FASTA parsing
+tqdm>=4.67.1
+pytest>=8.0
 
 # DNABERT-2 / DNABERT-S are extracted in-process (GPU machine only).  Not pinned here:
-# use the versions your GPU machine provides; run_manifest.json records them.
+# the published run used torch 2.8.0, transformers 4.49.0, datasets 4.1.0,
+# tokenizers 0.21.0 (results/run_manifest.json).
 # torch
 # transformers
 # datasets

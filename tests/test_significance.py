@@ -16,8 +16,8 @@ def test_adjust_and_marks_follow_benjamini_hochberg():
     assert adjusted["b"] == pytest.approx(0.02 * 4 / 2)
     assert adjusted["c"] == pytest.approx(0.04 * 4 / 3)
     assert adjusted["d"] == pytest.approx(0.5)
-    assert significance.marks({"x": 0.0004, "y": 0.004, "z": 0.04, "w": 0.06}) == \
-        {"x": "***", "y": "**", "z": "*", "w": "ns"}
+    assert [significance.label(p) for p in (0.0004, 0.004, 0.04, 0.06)] == \
+        ["***", "**", "*", "ns"]
     assert significance.label(float("nan")) == ""
 
 
@@ -159,7 +159,7 @@ def test_figures_stage_builds_the_study_tests_before_the_main_figures(monkeypatc
 
 
 def test_a_registry_model_without_some_tables_is_left_out_not_fatal(tmp_path, monkeypatch, capsys):
-    """Extra registry models (minhash1k, kmer_canon) may have been scored only in part."""
+    """A model scored only in part (here: P@5 but no RC proximity) is skipped, not fatal."""
     from glmbench import models as registry
     from glmbench.figures import main
 
@@ -168,13 +168,13 @@ def test_a_registry_model_without_some_tables_is_left_out_not_fatal(tmp_path, mo
     rng = np.random.default_rng(4)
     for virus, _ in main.VIRUSES:
         _write(tmp_path, "kmer", virus, [rng.uniform(0.7, 0.8, 10)])
-        _write(tmp_path, "minhash1k", virus, [rng.uniform(0.2, 0.3, 10)])   # P@5 only
+        _write(tmp_path, "minhash", virus, [rng.uniform(0.2, 0.3, 10)])     # P@5 only
         path = tables.model_dir("kmer", tmp_path) / tables.matrix_name("cross_P", 5, virus)
         frame = pd.DataFrame([rng.uniform(0.5, 0.6, 10)],
                              columns=[f"sample_{i}" for i in range(10)])
         frame.insert(0, "layer", ["-"])
         frame.to_excel(path, index=False)
-    models = registry.resolve(["kmer", "minhash1k"])
+    models = registry.resolve(["kmer", "minhash"])
     fig5 = main.build_fig5(models, tmp_path)
     assert set(fig5["model"]) == {"kmer"}
-    assert "minhash1k: no cross_P@5" in capsys.readouterr().out
+    assert "minhash: no cross_P@5" in capsys.readouterr().out

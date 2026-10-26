@@ -16,8 +16,7 @@ What the paired test covers.  Wilcoxon over the 50 overlapping reference samples
 robustness to the *draw of the reference set* only -- not to the choice of viruses
 (which unseen orders, which of their genomes).  With n = 50 the exact p-value hits its
 floor 2/2^50 = 1.8e-15 whenever one model wins on every sample, so such values are
-"won every draw", not an estimate.  For uncertainty over genomes see
-``bootstrap_ci_by_genome`` below.
+"won every draw", not an estimate.
 
 Corrections.  Within one panel, Holm over its pairs of models.  Across the study, Holm
 (family-wise) and Benjamini-Hochberg (false discovery rate) over the distinct
@@ -149,70 +148,3 @@ def correct(tests: pd.DataFrame, key_columns=("source", "model_a", "model_b")) -
     tests = tests.join(adjusted, on="comparison")
     tests["signif"] = tests["p_bh_all"].map(stars)
     return tests
-
-
-# ── cluster bootstrap over genomes ──────────────────────────────────────────
-
-def genome_matrix(per_genome: pd.DataFrame, metric: str, layer=None) -> pd.DataFrame:
-    """Per-genome table (``results/metrics/<model>/per_genome_*.csv.gz``) -> samples x genomes.
-
-    ``layer`` selects one layer (as the string stored in the file); ``None`` is only
-    valid for layer-less models, where the single layer is taken.
-    """
-    frame = per_genome[per_genome["metric"] == metric]
-    layers = frame["layer"].astype(str).unique()
-    if layer is None:
-        if len(layers) != 1:
-            raise ValueError(f"{len(layers)} layers present; say which one")
-        layer = layers[0]
-    frame = frame[frame["layer"].astype(str) == str(layer)]
-    return frame.pivot(index="sample", columns="genome", values="value")
-
-
-def bootstrap_ci_by_genome(values, n_boot: int = 10_000, alpha: float = 0.05,
-                           seed: int | None = None) -> dict:
-    """Cluster bootstrap over genomes: a CI that treats the genome as the unit.
-
-    ``values`` is ``(n_samples, n_genomes)`` -- one row per reference draw, one column
-    per genome of the unseen order (a 1-D array is read as one row).  Fragments of a
-    genome are not independent observations, and neither are the 50 reference draws
-    (they share a population of reference viruses), so what varies *between
-    independent units* is the genome.  Each replicate resamples genomes with
-    replacement, then averages over those genomes and over the reference draws.
-
-    The interval answers "how uncertain is this score given which genomes of the
-    order happened to be available"; the Wilcoxon test over reference samples does not
-    (it only reflects the choice of reference draw).  With few genomes the percentile
-    interval is optimistic and is reported with ``n_genomes`` so a reader can see that.
-
-    ``seed`` is required: every random choice in the package takes an explicit seed.
-    NaNs (a genome missing from a draw) are ignored in the averages.
-    """
-    if seed is None:
-        raise ValueError("bootstrap_ci_by_genome needs an explicit seed")
-    matrix = np.atleast_2d(np.asarray(values, dtype=float))
-    n_genomes = matrix.shape[1]
-    if n_genomes < 2:
-        raise ValueError("a bootstrap over genomes needs at least two genomes")
-
-    per_genome = np.nanmean(matrix, axis=0)              # average over reference draws
-    rng = np.random.default_rng(seed)
-    picks = rng.integers(0, n_genomes, size=(n_boot, n_genomes))
-    replicates = per_genome[picks].mean(axis=1)
-    low, high = np.quantile(replicates, [alpha / 2, 1 - alpha / 2])
-    return {"estimate": float(per_genome.mean()), "low": float(low), "high": float(high),
-            "n_genomes": int(n_genomes), "n_boot": int(n_boot), "alpha": alpha,
-            "seed": int(seed)}
-
-
-def bootstrap_diff_by_genome(first, second, n_boot: int = 10_000, alpha: float = 0.05,
-                             seed: int | None = None) -> dict:
-    """Cluster bootstrap of the paired difference ``first - second`` over genomes.
-
-    Both are ``(n_samples, n_genomes)`` over the *same* genomes (the model comparison
-    on one unseen order).  The same resampled genomes are used for both models.
-    """
-    first, second = np.asarray(first, dtype=float), np.asarray(second, dtype=float)
-    if first.shape != second.shape:
-        raise ValueError("the two models must be scored on the same samples and genomes")
-    return bootstrap_ci_by_genome(first - second, n_boot, alpha, seed)

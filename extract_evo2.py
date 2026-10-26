@@ -1,15 +1,16 @@
-"""
-Evo2 embedding extractor — запускать в окружении evo2_env.
+"""Evo2 embedding extractor -- run it inside the ``evo2_env`` conda environment.
 
-Использование:
+The pipeline calls it through ``conda run`` (``glmbench/representations/transformers.py``);
+it can also be run by hand:
+
     python extract_evo2.py --fasta data/my_virus.fa --name my_virus
     python extract_evo2.py --fasta data/my_virus.fa --name my_virus --outdir data/latent_dim/evo2
 
-Формат FASTA: заголовки вида  >НАЗВАНИЕ_idx
-Выходной файл: {outdir}/{name}.pickle
-  Если хоть один фрагмент не обработан: id пишутся в {outdir}/{name}.failed.txt,
-  код возврата 1 (pickle при этом сохраняется, но неполный).
-  Структура: {block_idx: {label: [np.array, ...]}}  (32 блока)
+FASTA headers are ``<label>_<index>``.  Output: ``<outdir>/<name>.pickle`` holding
+``{block: {label: [vector, ...]}}`` for the 32 ``blocks.<i>.mlp.l3`` outputs, each the
+mean over the token positions of the fragment.  If any fragment fails, its id and the
+reason are written to ``<outdir>/<name>.failed.txt`` and the exit code is 1 (the
+pickle is still written, but incomplete).
 """
 
 import argparse
@@ -36,7 +37,7 @@ def parse_args():
 
 
 def extract_label(record_id: str) -> str:
-    """НАЗВАНИЕ_idx  →  НАЗВАНИЕ (берём всё до последнего подчёркивания)."""
+    """``<label>_<index>`` -> ``<label>`` (everything before the last underscore)."""
     if "_" in record_id:
         return record_id.rsplit("_", 1)[0]
     return record_id

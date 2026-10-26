@@ -148,8 +148,6 @@ def extract_evo2(model: Model, fasta_path: Path, name: str, latent_dir=None) -> 
     outdir.mkdir(parents=True, exist_ok=True)
     arguments = [str(config.CODE_ROOT / "extract_evo2.py"),
                  "--fasta", str(fasta_path), "--name", name, "--outdir", str(outdir)]
-    if model.revision:
-        arguments += ["--model_id", model.revision]
     return _conda(model.conda_env, arguments, cwd=config.CODE_ROOT)
 
 
@@ -158,23 +156,22 @@ def viralm_hook_path() -> Path:
 
 
 def check_viralm_hook() -> Path:
-    """Fail early, with instructions, if the ViraLM hook script is not installed.
+    """Fail early, with instructions, if ViraLM is not set up next to its hook.
 
-    The hook is *not* part of this repository (it wraps a third-party model with its
-    own licence); see the README section "ViraLM" for where to get the model and for
-    exactly what the script must accept and write.
+    The hook script is part of this repository; the ViraLM model files are not (a
+    third-party model with its own licence).  They are expected in ``model/`` next to
+    the hook, and the ``viralm`` conda environment must run the hook (see the README
+    section "ViraLM").
     """
     hook = viralm_hook_path()
     if not hook.is_file():
+        raise SystemExit(f"ViraLM hook script not found: {hook}")
+    if not (hook.parent / "model").is_dir():
         raise SystemExit(
-            f"ViraLM hook script not found: {hook}\n"
-            f"  ViraLM is not bundled with this repository. Install ViraLM from "
-            f"https://github.com/ChengPENG-wolf/ViraLM (check its licence), put the "
-            f"hook that dumps per-layer embeddings at\n"
-            f"  {VIRALM_HOOK_DIR}/{VIRALM_HOOK_SCRIPT}\n"
-            f"  and make the 'viralm' conda environment run it. The command line it "
-            f"must accept and the files it must write are specified in the README "
-            f"(section 'ViraLM').")
+            f"ViraLM model files not found in {VIRALM_HOOK_DIR}/model/\n"
+            f"  Download the ViraLM model (https://github.com/ChengPENG-wolf/ViraLM, check "
+            f"its licence) into that folder and create the 'viralm' conda environment "
+            f"from ViraLM's instructions; see the README (section 'ViraLM').")
     return hook
 
 

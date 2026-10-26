@@ -47,8 +47,8 @@ def set_root(root) -> Path:
     with ``spawn`` (Windows, macOS) import this module with the same root.
     """
     global ROOT, DATA, ICTV_DIR, UNSEEN_DIR, PREPROC_DIR, REFERENCE_DIR, LATENT_DIR
-    global RESULTS, METRICS, FIGURE_DATA, STATISTICS, SELECTION_FILE, MANIFEST_FILE, SCALING_DISTANCE_DIR
-    global FIGURES, FIG_MAIN, FIG_SUPP, FIG_STATS, FIG_EXPLORATORY, FIGURE_DIRS
+    global RESULTS, METRICS, FIGURE_DATA, STATISTICS, SELECTION_FILE, MANIFEST_FILE
+    global FIGURES, FIG_MAIN, FIG_SUPP, FIG_STATS, FIGURE_DIRS
 
     ROOT = Path(root).resolve()
     os.environ[ROOT_ENV] = str(ROOT)
@@ -67,20 +67,17 @@ def set_root(root) -> Path:
     FIGURE_DATA = RESULTS / "figure_data"          # the numbers plotted in each figure
     STATISTICS = RESULTS / "statistics"            # significance tests
     SELECTION_FILE = METRICS / "selection.json"    # chosen layer / word length per model
-    SCALING_DISTANCE_DIR = METRICS / "scaling_distance"  # same models, other scaling/distance
     MANIFEST_FILE = RESULTS / "run_manifest.json"  # what produced the numbers
 
     # ── plots ───────────────────────────────────────────────────────────────
     FIGURES = ROOT / "figures"
-    FIG_MAIN = FIGURES / "main"                    # Fig. 1, 2, 4-8 of the article
+    FIG_MAIN = FIGURES / "main"                    # Fig. 1, 2, 4-8 (repository numbering)
     FIG_SUPP = FIGURES / "supplementary"           # every layer of every metric
     FIG_STATS = FIGURES / "statistics"             # significance plots
-    FIG_EXPLORATORY = FIGURES / "exploratory"
     FIGURE_DIRS = {
         "main": FIG_MAIN,
         "supplementary": FIG_SUPP,
         "statistics": FIG_STATS,
-        "exploratory": FIG_EXPLORATORY,
     }
     return ROOT
 
@@ -95,7 +92,6 @@ N_REFERENCE = 50         # reference samples
 REFERENCE_GENOMES_PER_CLASS = 10     # genomes drawn per taxonomic class
 REFERENCE_MIN_SPECIES = 10           # a class qualifies with MORE than this many species
 REFERENCE_CHUNKS_PER_GENOME = 10     # non-overlapping fragments per reference genome
-PER_GENOME_KS = (5, 10)              # the k whose per-genome values are stored
 KS = tuple(range(1, 11))  # the k of P@k, computed in one pass
 PK_FOR_FIGURES = 5       # the P@k reported in Fig. 1, 4 and 5
 REFERENCE_METRIC = "P5"  # reference table that chooses the layer and the word length

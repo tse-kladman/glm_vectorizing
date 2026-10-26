@@ -190,44 +190,7 @@ def test_corrupt_reference_samples_are_counted_as_missing(latent, tmp_path):
         reference.compute(DNABERT2, 4, latent, tmp_path / "c", seed=1, write=False)
 
 
-# ── leave-genome-out P@5 and the Jensen-Shannon distance matrix ─────────────
-
-def test_leave_genome_out_p5_ignores_pieces_of_the_same_genome():
-    """Fragments of one genome are near-duplicates; classes carry no other signal.
-
-    Plain P@5 is then high only because the neighbours are pieces of the same genome;
-    with the genome excluded nothing is left, and P5_lgo drops to about chance.
-    """
-    rng = np.random.default_rng(11)
-    groups, genomes = {}, {}
-    for c in range(4):
-        rows, ids = [], []
-        for g in range(5):
-            centre = rng.normal(0, 5, 8)                       # genome, not class, signal
-            rows.append(centre + rng.normal(0, 0.05, (6, 8)))
-            ids += [f"g{c}_{g}"] * 6
-        groups[f"c{c}"], genomes[f"c{c}"] = np.vstack(rows), ids
-    scores = reference.benchmark_sample(groups, DNABERT2, 0, genomes=genomes)
-    assert scores["P5"] > 0.95
-    assert scores["P5_lgo"] < 0.5
-
-
-def test_leave_genome_out_p5_is_nan_without_a_matching_manifest():
-    rng = np.random.default_rng(12)
-    groups = blobs(rng, classes=4, per_class=10)
-    assert np.isnan(reference.benchmark_sample(groups, DNABERT2, 0)["P5_lgo"])
-    short = {label: ["g"] * 9 for label in groups}            # one id missing per class
-    assert np.isnan(reference.benchmark_sample(groups, DNABERT2, 0, genomes=short)["P5_lgo"])
-
-
-def test_sample_genomes_reads_the_manifest_in_fasta_order(tmp_path):
-    (tmp_path / "manifest_sample_3.tsv").write_text(
-        "# draw=3 seed=45\nfragment\tclass\tspecies\tisolate\taccession\tstart\n"
-        "A_0\tA\tsp1\tI1\tX1\t0\nA_1\tA\tsp1\tI1\tX1\t2000\nA_2\tA\tsp2\tI2\tX2\t0\n"
-        "B_0\tB\tsp3\tI3\tX3\t0\n", encoding="utf8")
-    assert reference.sample_genomes(3, tmp_path) == {"A": ["I1", "I1", "I2"], "B": ["I3"]}
-    assert reference.sample_genomes(4, tmp_path) is None
-
+# ── the Jensen-Shannon distance matrix ──────────────────────────────────────
 
 def test_jensenshannon_distance_matrix_is_the_square_root_of_jsd():
     """K-medoids and the silhouette use sqrt(JSD), which is a metric; JSD is not."""
@@ -241,3 +204,34 @@ def test_jensenshannon_distance_matrix_is_the_square_root_of_jsd():
     assert distance[0, 1] == pytest.approx(np.sqrt(jsd), rel=1e-5)
     # triangle inequality on every triple
     assert (distance[:, :, None] <= distance[:, None, :] + distance.T[None, :, :] + 1e-6).all()
+
+
+# ── the k-mer length sweep (Fig. S1a) ───────────────────────────────────────
+
+def test_kmer_sweep_benchmarks_every_word_length_on_every_sample(tmp_path, monkeypatch):
+    rng = np.random.default_rng(12)
+    bias = {"a": [0.4, 0.1, 0.1, 0.4], "b": [0.1, 0.4, 0.4, 0.1], "c": [0.25] * 4}
+    for index in range(2):
+        records = [f">{label}_{n}\n{''.join(rng.choice(list('ACGT'), 400, p=p))}\n"
+                   for label, p in bias.items() for n in range(8)]
+        (tmp_path / f"sample_{index}.fa").write_text("".join(records))
+
+    summary, raw = selection.sweep_benchmark(KMER, [1, 2, 3], reference_dir=tmp_path,
+                                             n_ref=3, max_workers=1, seed=0)
+    assert list(raw.columns) == ["k", "sample", "P@5", "ARI", "Silhouette"]
+    assert sorted(raw["sample"].unique()) == [0, 1]           # sample_2 does not exist
+    assert list(summary["k"]) == [1, 2, 3]
+    assert summary.loc[summary["k"] == 2, "P@5_std"].item() == \
+        pytest.approx(raw[raw["k"] == 2]["P@5"].std(ddof=0))
+    assert raw["P@5"].mean() > 0.6                            # three distinct compositions
+    with pytest.raises(ValueError, match="k-mer profiles"):
+        selection.sweep_benchmark(DNABERT2, [1], reference_dir=tmp_path)
+
+    # the workbook is exactly what Fig. S1 is built from
+    from glmbench import config
+    from glmbench.figures import main
+    monkeypatch.setattr(config, "FIGURE_DATA", tmp_path / "figure_data")
+    selection.save_sweep_benchmark(summary, raw, tables.kmer_sweep_path(tmp_path / "metrics"))
+    figure = main.build_fig3(tmp_path / "metrics").set_index(["metric", "k"])
+    assert figure.loc[("P5", 2), "mean"] == pytest.approx(raw[raw["k"] == 2]["P@5"].mean())
+    assert figure.loc[("ARI", 3), "n"] == 2

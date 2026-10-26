@@ -2,9 +2,9 @@
 
 Each input genome is cut into fixed-length chunks (incomplete tail pieces are
 dropped; if there are more than ``max_chunks``, a seeded random subset is kept) and a
-reverse-complement copy of every chunk is written alongside it.  Both are needed: the forward fragments are
-what the metrics score, and the reverse-complement ones are what reveals whether a
-model reads the two strands of the same sequence as the same thing.
+reverse-complement copy of every chunk is written alongside it.  Both are needed: the
+forward fragments are what the metrics score, and the reverse-complement ones are what
+reveals whether a model reads the two strands of the same sequence as the same thing.
 
 Fragment headers carry the class in the name -- ``<label>_<index>`` -- which is how
 every representation recovers labels without a separate annotation file.
@@ -87,9 +87,9 @@ def preprocess(input_path: Path, output_path: Path, size=config.CHUNK_SIZE,
                min_length: int | None = None) -> Path:
     """Cut a FASTA into chunks named ``<original id>_<index>``.
 
-    The index counts the kept fragments 0, 1, 2, ... in genome order (so the header
-    format is the same as ever); where each one came from is written next to the
-    FASTA, in ``<output>.chunks.tsv``, together with the seed.
+    The index counts the kept fragments 0, 1, 2, ... in genome order; where each one
+    came from is written next to the FASTA, in ``<output>.chunks.tsv``, together with
+    the seed.
     """
     from Bio import SeqIO
     from Bio.Seq import Seq

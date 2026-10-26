@@ -86,4 +86,4 @@ def test_added_models_are_present_in_the_figure_data():
     fig4 = pd.read_csv(config.ROOT / "results" / "figure_data" / "fig4_newvirus_p5.csv")
     assert {"kmer_js", "minhash"} <= set(fig4["model"])
     fig1 = pd.read_csv(config.ROOT / "results" / "figure_data" / "fig1_reference_benchmark.csv")
-    assert set(fig1["model"]) == set(registry.PUBLISHED)     # no benchmark table yet for the others
+    assert {"kmer_js", "minhash"} <= set(fig1["model"])      # reference benchmark tables exist

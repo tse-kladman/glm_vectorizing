@@ -4,12 +4,10 @@ title: "Assessing the Capacity of Genomic Language Models to Generate Informativ
 type: software
 authors:
   - family-names: Kladchenko
-    given-names: "TODO"            # TODO: initials unknown
+    given-names: "A."
   - family-names: Popov
     given-names: "N. S."
   - family-names: Manolov
     given-names: "A. I."
-# TODO: the order and full names of the authors, the journal (MDPI Viruses), the DOI
-# and the publication year are to be filled in by the authors once known.
-# TODO: add `license:` once the owner has chosen one (see LICENSE.TODO.md).
-repository-code: "TODO"
+repository-code: "https://github.com/tse-kladman/glm_vectorizing"
+# The journal, year, DOI and licence are added when the article is published.

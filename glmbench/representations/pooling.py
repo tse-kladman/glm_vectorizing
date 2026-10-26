@@ -5,9 +5,7 @@ unit-tested on a CPU-only machine, and the transformer code only has to hand it 
 hidden states of one layer and the attention mask.
 
     mean   average of the token states over the positions the attention mask marks
-           as real -- **padding is excluded**.  (The first release of the DNABERT
-           embeddings averaged over all 512 positions, padding included, and without
-           a mask; see the README for what that changes.)
+           as real -- **padding is excluded**.
     cls    the state of the first token ([CLS]).
 
 A fragment shorter than the padded length has padding positions whose states are

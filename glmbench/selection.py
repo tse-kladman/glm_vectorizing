@@ -124,7 +124,7 @@ def _score_one(packed):
     if model.extractor == "minhash":
         groups = minhash_repr.from_fasta(path, k, model.sketch_size, seed)
     else:
-        groups = kmer_repr.from_fasta(path, k, model.canonical)
+        groups = kmer_repr.from_fasta(path, k)
     return k, index, reference_precision(groups, model, k_neighbours)
 
 
@@ -148,3 +148,74 @@ def sweep_k(model: Model, k_values=None, reference_dir=None, n_ref: int = 10,
     table.index.name = "k"
     table.columns = [f"sample_{column}" for column in table.columns]
     return table
+
+
+# ── word length of the 4-mer profile: the full benchmark at every k (Fig. S1a) ──
+#
+# The 4-mer baseline keeps k = 4 fixed (``models.KMER.fixed_k``).  This sweep shows why:
+# ARI, P@5 and silhouette of the same profile, compared by standardised cosine, at
+# every word length, on every reference sample.  A profile has 4^k columns, so at
+# k = 10 one reference sample takes several GB in memory; lower ``--max-workers`` there.
+
+SWEEP_COLUMNS = {"P5": "P@5", "ARI": "ARI", "silh": "Silhouette"}
+
+
+def _benchmark_one(packed):
+    """One (word length, reference sample) pair of the k-mer benchmark sweep."""
+    model_key, k, index, reference_dir, seed = packed
+    from .models import get
+
+    path = Path(reference_dir) / f"sample_{index}.fa"
+    if not path.exists():
+        return k, index, None
+    scores = reference.benchmark_sample(kmer_repr.from_fasta(path, k), get(model_key),
+                                        seed + index)
+    return k, index, {column: scores[metric] for metric, column in SWEEP_COLUMNS.items()}
+
+
+def sweep_benchmark(model: Model, k_values, reference_dir=None,
+                    n_ref: int = config.N_REFERENCE, max_workers=None,
+                    seed: int = config.SEED):
+    """ARI, P@5 and silhouette of a k-mer profile at every word length.
+
+    Returns ``(summary, raw)``: ``raw`` has one row per (k, reference sample), ``summary``
+    the mean and spread (``ddof=0``) per k.  Samples that are missing are reported and
+    left out.
+    """
+    if model.extractor != "kmer":
+        raise ValueError(f"{model.key}: the benchmark sweep is defined for k-mer profiles")
+    reference_dir = str(reference_dir or config.REFERENCE_DIR)
+    tasks = [(model.key, k, index, reference_dir, seed)
+             for k in k_values for index in range(n_ref)]
+
+    rows, missing = [], set()
+    with ProcessPoolExecutor(max_workers=max_workers or config.MAX_WORKERS) as pool:
+        futures = [pool.submit(_benchmark_one, task) for task in tasks]
+        for future in tqdm(as_completed(futures), total=len(tasks),
+                           desc=f"benchmark sweep {model.key}", unit="task"):
+            k, index, scores = future.result()
+            if scores is None:
+                missing.add(index)
+            else:
+                rows.append({"k": k, "sample": index, **scores})
+    if missing:
+        print(f"  WARNING: reference samples not found, left out: {sorted(missing)}")
+    if not rows:
+        raise SystemExit(f"no reference sample found in {reference_dir}")
+
+    raw = pd.DataFrame(rows).sort_values(["k", "sample"]).reset_index(drop=True)
+    grouped = raw.groupby("k")
+    summary = pd.DataFrame({"k": sorted(raw["k"].unique())}).set_index("k")
+    for column in SWEEP_COLUMNS.values():
+        summary[f"{column}_mean"] = grouped[column].mean()
+        summary[f"{column}_std"] = grouped[column].std(ddof=0)
+    return summary.reset_index(), raw
+
+
+def save_sweep_benchmark(summary: pd.DataFrame, raw: pd.DataFrame, path: Path) -> Path:
+    """The workbook ``figures.main.build_fig3`` reads: sheets ``summary`` and ``raw``."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with pd.ExcelWriter(path) as writer:
+        summary.to_excel(writer, sheet_name="summary", index=False)
+        raw.to_excel(writer, sheet_name="raw", index=False)
+    return path

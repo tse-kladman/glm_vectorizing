@@ -25,9 +25,7 @@ about whether the result would hold for other viruses than the two unseen orders
 studied, nor for other genomes of those orders.  The draws overlap heavily (they come
 from one pool of reference genomes), so they are far from 50 independent experiments,
 and the exact Wilcoxon p-value hits its floor 2/2^50 whenever one model wins on every
-draw -- a statement about the draws, not an estimate of a probability.  For
-uncertainty over the *genomes* of an unseen order, ``build_genome_ci`` provides cluster
-bootstrap intervals (statistics.bootstrap_ci_by_genome) from the per-genome tables.
+draw -- a statement about the draws, not an estimate of a probability.
 
 Figures: box plots of the per-sample values with significance brackets, box plots
 of the paired differences (what the test actually ranks), pairwise heat maps, an
@@ -181,53 +179,6 @@ def build(models, metrics_dir=None):
     save_table(tests, "pairwise_model_tests", float_format="%.6g",
                directory=config.STATISTICS)
     return samples, tests
-
-
-GENOME_METRICS = {"genome": ("P@5", "P@10"), "order": ("P@5", "P@10"),
-                  "cross": ("P@5", "P@10"), "ownrc": ("hit@5", "hit@10", "similarity")}
-
-
-def build_genome_ci(models, metrics_dir=None, seed: int = config.SEED,
-                    n_boot: int = 10_000):
-    """Cluster-bootstrap intervals over the genomes of each unseen order.
-
-    Reads the per-genome tables the metrics stage writes
-    (``results/metrics/<model>/per_genome_<kind>_<virus>.csv.gz``), takes each model at
-    the layer chosen on the reference benchmark, and bootstraps over genomes
-    (statistics.bootstrap_ci_by_genome).  Writes
-    ``results/statistics/genome_bootstrap_ci.csv``; nothing is written (and ``None`` is
-    returned) when no per-genome table exists yet, i.e. before the metrics stage has
-    been re-run with this version of the code.
-    """
-    rows = []
-    for model in models:
-        directory = tables.model_dir(model, metrics_dir)
-        layer = "-"
-        if model.layered:
-            if not tables.has_benchmark(model, metrics_dir=metrics_dir):
-                continue
-            layer = str(selection.layer_label(
-                model, selection.choose_layer(model, metrics_dir=metrics_dir)))
-        for path in sorted(directory.glob("per_genome_*.csv.gz")):
-            kind, virus = path.name[len("per_genome_"):-len(".csv.gz")].split("_", 1)
-            frame = tables.load_per_genome(path)
-            for metric in GENOME_METRICS.get(kind, ()):
-                try:
-                    matrix = statistics.genome_matrix(frame, metric, layer)
-                except (ValueError, KeyError):
-                    continue
-                if matrix.shape[1] < 2:
-                    continue
-                ci = statistics.bootstrap_ci_by_genome(matrix.to_numpy(), n_boot=n_boot,
-                                                       seed=seed)
-                rows.append({"model": model.key, "virus": virus, "protocol": kind,
-                             "metric": metric, "layer": layer, **ci})
-    if not rows:
-        print("  no per-genome tables yet -> genome-level intervals not computed")
-        return None
-    frame = pd.DataFrame(rows)
-    save_table(frame, "genome_bootstrap_ci", float_format="%.6g", directory=config.STATISTICS)
-    return frame
 
 
 def primary(frame: pd.DataFrame) -> pd.DataFrame:

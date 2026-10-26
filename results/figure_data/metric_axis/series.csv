@@ -1,8 +1,0 @@
-series,model,protocol
-kmer,kmer,P0
-kmer_k4_P5,kmer_k4,P5
-minhash_k6_P4,minhash_k6,P4
-dnabert2,dnabert2,P0
-dnabertS,dnabertS,P0
-viralm,viralm,P0
-evo2,evo2,P0

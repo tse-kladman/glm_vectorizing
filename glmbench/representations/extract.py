@@ -77,7 +77,7 @@ def extract_model(model: Model, items: list, latent_dir=None, k=None, force=Fals
             destination = directory / f"{name}.pickle"
             if destination.exists() and not force:
                 continue
-            groups = (kmer.from_fasta(path, word, model.canonical) if model.extractor == "kmer"
+            groups = (kmer.from_fasta(path, word) if model.extractor == "kmer"
                       else minhash.from_fasta(path, word, model.sketch_size, seed))
             if not groups:
                 print(f"  EMPTY input (no fragments): {config.relative(path)}")

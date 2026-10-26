@@ -152,8 +152,8 @@ def _variant_values(model, variant, virus, metrics_dir=None):
     """(layer, per-sample P@5) of one model under one scaling/distance variant, at the
     layer chosen on the reference set (None when the table does not exist)."""
     name = tables.matrix_name("P", config.PK_FOR_FIGURES, virus)
-    base = metrics_dir or config.METRICS
-    directory = base if variant == MAIN_VARIANT else base / "scaling_distance" / variant
+    directory = (metrics_dir if variant == MAIN_VARIANT
+                 else tables.scaling_distance_dir(variant, metrics_dir))
     path = tables.model_dir(model, directory) / name
     if not path.exists():
         return None, None
@@ -289,7 +289,11 @@ def build_all(models, metrics_dir=None) -> None:
     build_reference(models, metrics_dir)
     build_unseen(models, metrics_dir)
     build_scaling_distance(metrics_dir)
-    build_early_layer("evo2", metrics_dir)
+    if "evo2" in {model.key for model in models} and tables.has_benchmark("evo2",
+                                                                          metrics_dir=metrics_dir):
+        build_early_layer("evo2", metrics_dir)
+    else:
+        print("  evo2: no benchmark tables, early-layer table not built")
 
 
 def draw_all(models, metrics_dir=None) -> None:

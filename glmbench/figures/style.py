@@ -15,7 +15,6 @@ import matplotlib as mpl
 import pandas as pd
 
 from .. import config
-from ..models import MODELS
 
 
 def set_style() -> None:
@@ -36,14 +35,6 @@ def set_style() -> None:
         "pdf.fonttype": 42,
         "ps.fonttype": 42,
     })
-
-
-def display(key: str) -> str:
-    return MODELS[key].display if key in MODELS else key
-
-
-def color(key: str) -> str:
-    return MODELS[key].color if key in MODELS else "#444444"
 
 
 def save_table(frame: pd.DataFrame, name: str, index: bool = False,

@@ -10,10 +10,11 @@ A tiny world is built in a scratch directory that becomes the data root
 
 and then runs, via ``glmbench.cli.main([...])``:
 
-    samples -> prep -> select -> extract -> benchmark -> metrics -> stats -> figures
+    samples -> prep -> sweep -> select -> extract -> benchmark -> metrics
+            -> metrics --scaling-distance -> stats -> figures
 
-for the four models that need no GPU and no download (kmer, kmer_canon, kmer_js,
-minhash).  The transformer extractors are not exercised here -- they need torch, the
+for the three models that need no GPU and no download (kmer, kmer_js, minhash).  The
+transformer extractors are not exercised here -- they need torch, the
 model weights and a GPU; their pooling arithmetic and failure handling are covered by
 test_pooling.py and test_extraction.py.
 
@@ -30,7 +31,7 @@ import pytest
 
 from glmbench import cli, config, models
 
-MODELS = ["kmer", "kmer_canon", "kmer_js", "minhash"]
+MODELS = ["kmer", "kmer_js", "minhash"]
 N_REF = 6
 LETTERS = np.array(list("ACGT"))
 
@@ -114,12 +115,15 @@ def pipeline(world):
         ["samples", "--vmr", str(world["vmr"]), "--fasta-dir", str(world["genomes"]),
          "--n-ref", str(N_REF), "--expected-classes", "3", *common],
         ["prep", "--max-chunks", "4", *common],
-        ["select", *models_arg, "--n-ref", "3", "--k-values", "3", "4", "5", *common],
+        ["sweep", "--n-ref", str(N_REF), "--k-values", "2", "3", "4", *common],
+        ["select", *models_arg, "--sweep-samples", "3", "--k-values", "3", "4", "5", *common],
         ["extract", *models_arg, "--n-ref", str(N_REF), *common],
         ["benchmark", *models_arg, "--n-ref", str(N_REF), *common],
-        ["select", *models_arg, "--k-values", "3", "4", "5", "--n-ref", "3", *common],
+        ["select", *models_arg, "--k-values", "3", "4", "5", "--sweep-samples", "3", *common],
         ["metrics", *models_arg, "--n-ref", str(N_REF), *common],
-        ["stats", *models_arg, "--n-boot", "300", *common],
+        ["metrics", *models_arg, "--n-ref", str(N_REF), "--scaling-distance",
+         "--layers", "selected", *common],
+        ["stats", *models_arg, *common],
         ["figures", *models_arg, *common],
     ]
     for argv in stages:
@@ -178,46 +182,59 @@ def test_benchmark_numbers_are_sane(pipeline):
     assert table(pipeline, "kmer", "silh.xlsx").to_numpy().mean() > 0.0
 
 
-# ── the unseen-order metrics, both protocols ────────────────────────────────
+# ── the unseen-order metrics ────────────────────────────────────────────────
 
 def matrix(root, model, name):
+    """A metric table under ``root`` (a repository root, or a metrics folder)."""
     from glmbench.metrics import tables
-    return tables.load_matrix(root / "results" / "metrics" / model / name)
+    base = root / "results" / "metrics" if (root / "results").is_dir() else root
+    return tables.load_matrix(base / model / name)
 
 
-def test_both_protocols_were_written_with_sane_values(pipeline):
+def test_genome_level_and_rc_proximity_tables_have_sane_values(pipeline):
     for model in MODELS:
         for virus in ("Egovirales_preproc", "Mriyavirales_preproc"):
             genome_level = matrix(pipeline, model, f"P@5_matrix_{virus}.xlsx")
-            order_level = matrix(pipeline, model, f"Porder@5_matrix_{virus}.xlsx")
-            assert genome_level.shape == (1, N_REF) and order_level.shape == (1, N_REF)
+            proximity = matrix(pipeline, model, f"cross_P@5_matrix_{virus}.xlsx")
+            assert genome_level.shape == (1, N_REF) and proximity.shape == (1, N_REF)
             # 4 fragments per genome leave only 3 possible same-genome neighbours, so
             # P@5 is capped at 3/5; the weaker representations (sketches, JS) stay below it
             assert 0.2 < genome_level.to_numpy().min() <= 0.6 + 1e-9
-            # genomes of an order share a composition -> relatives are found, far above
-            # the chance level (~ 0.2)
-            floor = 0.8 if model in ("kmer", "kmer_canon") else 0.3   # sketches are weak
-            assert order_level.to_numpy().mean() > floor
+            assert proximity.to_numpy().min() >= 0 and proximity.to_numpy().max() <= 1
 
 
-def test_only_the_canonical_models_find_their_own_reverse_complement(pipeline):
-    def hit1(model):
-        return matrix(pipeline, model, "ownrc_hit@1_matrix_Egovirales_preproc.xlsx").to_numpy().mean()
-
-    assert hit1("kmer_canon") == pytest.approx(1.0)
-    assert hit1("minhash") == pytest.approx(1.0)
-    assert hit1("kmer") < 0.9
-    assert hit1("kmer_js") < 0.9
-    similarity = matrix(pipeline, "kmer_canon", "ownrc_sim_matrix_Egovirales_preproc.xlsx")
-    assert similarity.to_numpy().mean() == pytest.approx(1.0)
+def test_the_strand_invariant_sketch_has_its_own_rc_as_nearest_neighbour(pipeline):
+    """A MinHash sketch of x equals that of RC(x): RC proximity at k = 1 is exactly 1."""
+    proximity = matrix(pipeline, "minhash", "cross_P@1_matrix_Egovirales_preproc.xlsx")
+    assert proximity.to_numpy().mean() == pytest.approx(1.0)
 
 
-def test_per_genome_tables_and_pairwise_tables_exist(pipeline):
-    directory = pipeline / "results" / "metrics" / "kmer_canon"
-    for kind in ("genome", "order", "cross", "ownrc"):
-        frame = pd.read_csv(directory / f"per_genome_{kind}_Egovirales_preproc.csv.gz")
-        assert frame["genome"].nunique() == 6
-    pairwise = directory / "pairwise_Egovirales_vs_Mriyavirales"
+def test_the_kmer_sweep_has_every_word_length_and_sample(pipeline):
+    path = pipeline / "results" / "metrics" / "kmer_sweep" / "kmer_sweep_results.xlsx"
+    raw = pd.read_excel(path, sheet_name="raw")
+    assert sorted(raw["k"].unique()) == [2, 3, 4]
+    assert raw.groupby("k")["sample"].nunique().eq(N_REF).all()
+    assert raw["P@5"].between(0, 1).all() and raw["ARI"].notna().all()
+    summary = pd.read_excel(path, sheet_name="summary").set_index("k")
+    assert summary.loc[4, "P@5_mean"] == pytest.approx(raw[raw["k"] == 4]["P@5"].mean())
+
+
+def test_scaling_distance_variants_were_written_for_the_cosine_models_only(pipeline):
+    base = pipeline / "results" / "metrics" / "scaling_distance"
+    for variant in ("raw_cosine", "standardized_euclidean", "raw_euclidean"):
+        for virus in ("Egovirales_preproc", "REVERSECOMPLEMENTMriyavirales_preproc"):
+            frame = matrix(base / variant, "kmer", f"P@5_matrix_{virus}.xlsx")
+            assert frame.shape == (1, N_REF) and np.isfinite(frame.to_numpy()).all()
+        assert not (base / variant / "kmer_js").exists()
+        assert not (base / variant / "kmer" / "pairwise_Egovirales_vs_Mriyavirales").exists()
+    figure = pd.read_csv(pipeline / "results" / "figure_data" / "supplementary"
+                         / "scaling_distance.csv")
+    assert set(figure.loc[figure["model"] == "kmer", "variant"]) == {
+        "standardized_cosine", "raw_cosine", "standardized_euclidean", "raw_euclidean"}
+
+
+def test_pairwise_tables_exist(pipeline):
+    pairwise = pipeline / "results" / "metrics" / "kmer" / "pairwise_Egovirales_vs_Mriyavirales"
     assert (pairwise / "cross_1→2_fwd_fwd_matrix.xlsx").exists()
     assert (pairwise / "pk_fwd_1_in_2_matrix.xlsx").exists()
 
@@ -228,19 +245,16 @@ def test_statistics_were_computed(pipeline):
     tests = pd.read_csv(pipeline / "results" / "statistics" / "pairwise_model_tests.csv")
     assert len(tests) > 0 and {"p_wilcoxon", "p_bh_all", "signif"} <= set(tests.columns)
     assert set(tests["model_a"]) | set(tests["model_b"]) == set(MODELS)
-    ci = pd.read_csv(pipeline / "results" / "statistics" / "genome_bootstrap_ci.csv")
-    assert (ci["low"] <= ci["estimate"] + 1e-9).all() and (ci["estimate"] <= ci["high"] + 1e-9).all()
-    assert {"genome", "order", "ownrc"} <= set(ci["protocol"])
-    assert (ci["n_genomes"] == 6).all()
 
 
 def test_figures_were_drawn(pipeline):
     main = pipeline / "figures" / "main"
     for name in ("fig1_reference_benchmark", "fig2_layerwise", "fig4_newvirus_p5",
-                 "fig5_cross_p5", "fig6_pk_vs_k", "fig7_pk_vs_cross",
-                 "fig4b_order_p5", "fig5b_own_rc_hit5", "fig5c_own_rc_similarity"):
+                 "fig5_cross_p5", "fig6_pk_vs_k", "fig7_pk_vs_cross"):
         assert (main / f"{name}.png").stat().st_size > 1000, name
         assert (main / f"{name}.pdf").exists(), name
+    assert (pipeline / "figures" / "main" / "fig8_scaling_distance.png").exists()
+    assert (pipeline / "figures" / "supplementary" / "figS1_kmer_sweep.png").exists()
     assert (pipeline / "figures" / "statistics" / "pvalue_overview.png").exists()
     data = pd.read_csv(pipeline / "results" / "figure_data" / "fig4_newvirus_p5.csv")
     assert set(data["model"]) == set(MODELS)
@@ -251,8 +265,8 @@ def test_figures_were_drawn(pipeline):
 def test_the_manifest_records_the_run(pipeline):
     manifest = json.loads((pipeline / "results" / "run_manifest.json").read_text())
     stages = {entry["stage"] for entry in manifest["stages"]}
-    assert {"samples", "prep", "select", "extract", "benchmark", "metrics", "stats",
-            "figures"} <= stages
+    assert {"samples", "prep", "sweep", "select", "extract", "benchmark", "metrics",
+            "stats", "figures"} <= stages
     assert manifest["python"] and manifest["packages"]["numpy"]
     assert "commit" in manifest["git"]
     first = manifest["stages"][0]

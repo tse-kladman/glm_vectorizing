@@ -135,48 +135,29 @@ PAD_LABEL = "\x00no-neighbour"
 
 
 def knn_excluding(query: np.ndarray, space: np.ndarray, n_wanted: int, model: Model,
-                  self_index=None, query_groups=None, space_groups=None) -> np.ndarray:
-    """Nearest neighbours of each query row, with named rows and groups left out.
+                  self_index=None) -> np.ndarray:
+    """Nearest neighbours of each query row, with its own row left out.
 
     Removing a query's own entry from its neighbour list by *position* (``[:, 1:]``)
     assumes the entry is first.  It is not, when the space holds a duplicate of the
     query (a repeated fragment, an identical sequence) or when distances tie -- and a
     zero vector ties with every other zero vector.  Then the wrong row is dropped and
     the query is silently scored against itself.  So exclusion is done **by index**:
-
-    ``self_index``     per query row, its own row number inside ``space`` (or ``-1``)
-    ``query_groups`` / ``space_groups``
-                       a neighbour is dropped when its group equals the query's;
-                       used by the leave-genome-out protocol, where *every* fragment
-                       of the query's own genome is off limits, not just the fragment
-                       itself
+    ``self_index`` gives, per query row, its own row number inside ``space`` (or ``-1``).
 
     Returns ``(n_query, n_wanted)`` indices into ``space``, nearest first, padded with
     ``PAD`` when fewer than ``n_wanted`` admissible neighbours exist.
     """
-    n_query = len(query)
-    extra = 0
-    if query_groups is not None:
-        query_groups = np.asarray(query_groups)
-        space_groups = np.asarray(space_groups)
-        # at most this many candidates can be excluded for any one query
-        sizes = {group: int((space_groups == group).sum()) for group in np.unique(query_groups)}
-        extra = max(sizes.values()) if sizes else 0
-    if self_index is not None:
-        self_index = np.asarray(self_index)
-        extra = max(extra, 1)
-
+    extra = 0 if self_index is None else 1
     found = knn(query, space, n_wanted + extra, model)
     keep = np.ones(found.shape, dtype=bool)
     if self_index is not None:
-        keep &= found != self_index[:, None]
-    if query_groups is not None:
-        keep &= space_groups[found] != query_groups[:, None]
+        keep &= found != np.asarray(self_index)[:, None]
 
     # first n_wanted admissible entries of every row, in their original order
     rank = np.cumsum(keep, axis=1)
     keep &= rank <= n_wanted
-    out = np.full((n_query, n_wanted), PAD, dtype=np.int64)
+    out = np.full((len(query), n_wanted), PAD, dtype=np.int64)
     rows, columns = np.nonzero(keep)
     out[rows, rank[rows, columns] - 1] = found[rows, columns]
     return out
@@ -219,38 +200,6 @@ def stack(groups: dict):
     return np.vstack(matrices), np.asarray(labels)
 
 
-# ── similarity of paired rows ───────────────────────────────────────────────
-
-def similarity_kind(model: Model) -> str:
-    """What :func:`rowwise_similarity` means for a model, for table headers."""
-    return {"cosine": "cosine", "minhash": "sketch agreement",
-            "jensenshannon": "1 - JSD (bits)"}.get(model.metric, model.metric)
-
-
-def rowwise_similarity(left: np.ndarray, right: np.ndarray, model: Model) -> np.ndarray:
-    """Similarity between ``left[i]`` and ``right[i]`` under the model's own notion.
-
-    cosine         cosine of the (already transformed) vectors
-    minhash        fraction of sketch positions that agree (the Jaccard estimate)
-    jensenshannon  1 - JSD in bits, so 1 means identical distributions
-
-    NaN where a cosine is undefined (a zero vector).
-    """
-    if model.metric == "cosine":
-        left, right = left.astype(np.float64), right.astype(np.float64)
-        norm = np.linalg.norm(left, axis=1) * np.linalg.norm(right, axis=1)
-        with np.errstate(invalid="ignore", divide="ignore"):
-            return np.where(norm > 0, (left * right).sum(axis=1) / norm, np.nan)
-    if model.metric == "minhash":
-        return (left == right).mean(axis=1)
-    if model.metric == "jensenshannon":
-        left, right = left.astype(np.float64), right.astype(np.float64)
-        divergence = (entropy((left + right) / 2)
-                      - 0.5 * (entropy(left) + entropy(right)))
-        return 1.0 - divergence
-    raise ValueError(f"no row-wise similarity for metric {model.metric!r}")
-
-
 # ── full distance matrix ────────────────────────────────────────────────────
 
 def distance_matrix(matrix: np.ndarray, model: Model) -> np.ndarray:
@@ -264,7 +213,7 @@ def distance_matrix(matrix: np.ndarray, model: Model) -> np.ndarray:
     Why the square root for Jensen-Shannon: K-medoids and the silhouette average and
     compare distances, so -- unlike the neighbour ranking -- they depend on the
     values, and JSD itself does not satisfy the triangle inequality.  sqrt(JSD) is a
-    metric (Endres & Schindelin 2003).  The first release used JSD here.
+    metric (Endres & Schindelin 2003).
     """
     if model.metric == "cosine":
         from sklearn.metrics import pairwise_distances

@@ -1,16 +1,12 @@
 """K-medoids on a precomputed distance matrix -- numpy only.
 
 The reference benchmark clusters each reference sample into as many clusters as it has
-classes and scores the partition against the true labels (adjusted Rand index).  The
-original tables used K-medoids from ``scikit-learn-extra``, which does not build on
-current Python/NumPy; this is a small re-implementation of the same "alternate" (Voronoi
-iteration) algorithm, with the same two initialisations, so the package depends on
-numpy and scikit-learn only.
-
-It is a re-implementation, not the original code: ties, iteration order and the
-random ``k-medoids++`` seeding can differ in the last decimals, so ARI values
-recomputed with it are equivalent in kind but not guaranteed to be bit-identical to
-the committed tables (those pre-date this module; see the README).
+classes and scores the partition against the true labels (adjusted Rand index).  This
+is the "alternate" (Voronoi iteration) K-medoids algorithm of ``scikit-learn-extra``,
+with the same two initialisations, implemented here so that the package depends on
+numpy and scikit-learn only (``scikit-learn-extra`` does not build on current
+Python/NumPy).  Ties, iteration order and the random ``k-medoids++`` seeding can differ
+from ``scikit-learn-extra`` in the last decimals.
 
     init="k-medoids++"   seeded D^2-style spreading of the initial medoids; the best of
                          ``n_init`` restarts (lowest total distance to the medoids) is

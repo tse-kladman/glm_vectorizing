@@ -15,10 +15,9 @@ unseen orders are later embedded.  Each of the ``n_ref`` samples is an independe
                  ``manifest_sample_<i>.tsv`` recording which genome and which offset
                  every fragment came from.
 
-Draw ``i`` uses ``numpy.random.default_rng(seed + i)``, so the 50 draws are independent
-of one another and each is reproducible alone.  (The code this replaces called
-``DataFrame.sample(random_state=42)`` for every draw: with a fixed ``random_state`` the
-SAME genomes are returned each time, so draws would differ only in their fragments.)
+Draw ``i`` uses ``numpy.random.default_rng(seed + i)``, so each draw is reproducible
+alone.  The draws come from one pool of genomes, so they overlap: they are 50 draws,
+not 50 independent sets of viruses.
 
 The genomes themselves are not part of the repository.  Point ``fasta_dir`` at a
 directory of FASTA files whose record ids start with a GenBank accession (a trailing

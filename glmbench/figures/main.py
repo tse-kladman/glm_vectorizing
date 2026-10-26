@@ -5,18 +5,16 @@ Each figure has a ``build_*`` that turns metric tables into the CSV behind it an
 ``supplementary.py`` next to the other sensitivity checks.
 
 Numbering.  The repository numbers its figures in the order the pipeline draws them;
-the mapping to the article's numbering is the table in ``results/README.md``.  The
-former Fig. 3 (k-mer length sweep) is now Fig. S1 (``build_fig3`` / ``draw_fig3``
-keep their names).
-Models without the tables a figure needs (MinHash and Jensen-Shannon have no
-reference benchmark yet, so no Fig. 1/2 bars) are left out of that figure only, and
-the figure says so.
+the mapping to the article's numbering is the table in ``results/README.md``
+(``build_fig3`` / ``draw_fig3`` draw the k-mer length sweep, Fig. S1).
+Models without the tables a figure needs are left out of that figure only, and the
+figure says so.
 
-Terminology.  Two unrelated things were both called "CROSS" in earlier versions:
-*RC proximity* (Fig. 5: how close a forward fragment lies to the reverse-complement
-fragments of its own genome; higher is better) and *inter-order leakage* (Fig. 7: how
-often a fragment of one order retrieves a fragment of the other; lower is better).
-Column names of the committed CSVs keep the old names; titles and axes use these.
+Terminology.  Two different set-proximity measures appear: *RC proximity* (Fig. 5:
+how close a forward fragment lies to the reverse-complement fragments of its own
+genome; higher is better) and *inter-order leakage* (Fig. 7: how often a fragment of
+one order retrieves a fragment of the other; lower is better).  Both are stored with
+the column prefix ``cross``; titles and axes use these names.
 
 Where the layer comes from.  Fig. 1 and 2 *are* the reference benchmark, so they
 show the best layer of that benchmark itself.  Fig. 4, 5 and 6 report every model
@@ -37,9 +35,9 @@ import pandas as pd
 
 from .. import config, selection
 from ..metrics import reference, tables
-from ..models import Model
+from ..models import Model, color, display
 from . import significance
-from .style import color, display, load_table, save_figure, save_table
+from .style import load_table, save_figure, save_table
 
 VIRUSES = [("Egovirales_preproc", "Egovirales"),
            ("Mriyavirales_preproc", "Mriyavirales")]
@@ -48,11 +46,10 @@ FIG4_GROUPS = VIRUSES + [("REVERSECOMPLEMENTEgovirales_preproc", "Egovirales (RC
 PAIRWISE_DIR = "pairwise_Egovirales_vs_Mriyavirales"
 
 
-def _has_table(model: Model, filename: str, metrics_dir=None, quiet=False) -> bool:
+def _has_table(model: Model, filename: str, metrics_dir=None) -> bool:
     if (tables.model_dir(model, metrics_dir) / filename).exists():
         return True
-    if not quiet:
-        print(f"  {model.key}: no {filename}, left out of this figure")
+    print(f"  {model.key}: no {filename}, left out of this figure")
     return False
 
 
@@ -142,6 +139,13 @@ def draw_fig1(models):
     plt.close(figure)
 
 
+def _legend_below(figure, axis) -> None:
+    """One legend for all panels, under the plots, so it never covers a curve."""
+    handles, labels = axis.get_legend_handles_labels()
+    figure.legend(handles, labels, loc="upper center", bbox_to_anchor=(0.5, 0.0),
+                  ncol=min(len(labels), 7), fontsize=10, frameon=False)
+
+
 # ── Fig. 2: layer-wise ARI and P@5 ──────────────────────────────────────────
 
 def build_fig2(models, metrics_dir=None) -> pd.DataFrame:
@@ -197,9 +201,9 @@ def draw_fig2(models):
         axis.set_xlabel("Layer")
         axis.set_ylabel(title)
         axis.set_title(title)
-    axes[0].legend(loc="lower center", ncol=4, fontsize=8)
     figure.suptitle("Clustering quality across transformer layers", fontsize=15, y=1.02)
     figure.tight_layout()
+    _legend_below(figure, axes[0])
     save_figure(figure, "fig2_layerwise", kind="main")
     plt.close(figure)
 
@@ -208,15 +212,14 @@ def draw_fig2(models):
 
 def _sweep_tables(metrics_dir=None) -> dict:
     """{(method, metric): table rows = k, columns = reference samples}."""
-    base = metrics_dir or config.METRICS
     out = {}
-    path = base / "kmer_sweep" / "kmer_sweep_results.xlsx"
+    path = tables.kmer_sweep_path(metrics_dir)
     if path.exists():
         raw = pd.read_excel(path, sheet_name="raw")
         for metric, column in (("ARI", "ARI"), ("P5", "P@5")):
             out[("kmer", metric)] = raw.pivot(index="k", columns="sample", values=column)
     for key in ("kmer_js", "minhash"):
-        path = base / "k_sweep" / f"{key}_k_sweep.xlsx"
+        path = tables.k_sweep_path(key, metrics_dir)
         if path.exists():
             table = pd.read_excel(path).set_index("k")
             table.columns = [int(str(column).split("_")[1]) for column in table.columns]
@@ -291,30 +294,25 @@ def draw_fig3():
 
 # ── Fig. 4 and 5: the unseen orders ─────────────────────────────────────────
 
-def _unseen_table(models, groups, prefix, name, metrics_dir=None, filename=None,
-                  optional=False, panel=None) -> pd.DataFrame:
+def _unseen_table(models, groups, prefix, name, metrics_dir=None,
+                  panel=None) -> pd.DataFrame:
     """Mean and spread over the reference samples of one table, at the reference layer.
 
-    ``optional`` tables (the order-level and own-RC metrics, which only exist after a
-    re-run) skip models that lack the file and are not written at all if none has it.
-    A model that lacks a required table (e.g. a registry model scored with only part
-    of the protocols) is left out of the figure and named, as in the statistics.
+    A model that lacks the table is left out of the figure and named, as in the
+    statistics.
     ``panel`` maps a group label to its panel name in the study-wide test table; when
     given, the BH p of every model against the 4-mer profile is added.
     """
     rows = []
     for virus, label in groups:
         for model in models:
-            table = filename(virus) if filename else tables.matrix_name(
-                prefix, config.PK_FOR_FIGURES, virus)
-            if not _has_table(model, table, metrics_dir, quiet=optional):
+            table = tables.matrix_name(prefix, config.PK_FOR_FIGURES, virus)
+            if not _has_table(model, table, metrics_dir):
                 continue
             layer, values = _reference_row(model, table, metrics_dir)
             rows.append({"group": label, "model": model.key, "layer": layer,
                          "mean": float(values.mean()), "std": float(values.std(ddof=0))})
     frame = pd.DataFrame(rows)
-    if optional and frame.empty:
-        return frame
     if panel:
         tests = significance.study_tests()
         frame["p_vs_kmer_bh"] = [
@@ -333,25 +331,6 @@ def build_fig4(models, metrics_dir=None) -> pd.DataFrame:
 def build_fig5(models, metrics_dir=None) -> pd.DataFrame:
     return _unseen_table(models, VIRUSES, "cross_P", "fig5_cross_p5", metrics_dir,
                          panel=lambda group: f"RC-proximity P@5 {group}")
-
-
-def build_fig4b(models, metrics_dir=None) -> pd.DataFrame:
-    """Order-level P@5 (leave-genome-out): success = another genome of the same order."""
-    return _unseen_table(models, FIG4_GROUPS, "Porder", "fig4b_order_p5", metrics_dir,
-                         optional=True)
-
-
-def build_fig5b(models, metrics_dir=None) -> pd.DataFrame:
-    """Own-RC hit@5: the fragment's own reverse complement is among its 5 neighbours."""
-    return _unseen_table(models, VIRUSES, None, "fig5b_own_rc_hit5", metrics_dir,
-                         filename=lambda virus: tables.own_rc_names(config.PK_FOR_FIGURES, virus),
-                         optional=True)
-
-
-def build_fig5c(models, metrics_dir=None) -> pd.DataFrame:
-    """Mean similarity between a fragment and its own reverse complement."""
-    return _unseen_table(models, VIRUSES, None, "fig5c_own_rc_similarity", metrics_dir,
-                         filename=tables.own_rc_similarity_name, optional=True)
 
 
 def _grouped_bars(frame, models, order, ylabel, title, name):
@@ -397,31 +376,6 @@ def draw_fig5(models):
                   "RC proximity: share of the 5 nearest neighbors that are reverse-complement\n"
                   "fragments of the SAME genome (not necessarily the fragment's own RC)",
                   "fig5_cross_p5")
-
-
-def _draw_optional(name, groups, models, ylabel, title):
-    path = config.FIGURE_DATA / f"{name}.csv"
-    if path.exists():
-        _grouped_bars(load_table(name), models, [label for _, label in groups],
-                      ylabel, title, name)
-
-
-def draw_fig4b(models):
-    _draw_optional("fig4b_order_p5", FIG4_GROUPS, models, "Mean order-level Precision@5",
-                   "Order-level P@5, leave-genome-out: neighbors from ANOTHER genome of\n"
-                   "the same unseen order (own genome excluded)")
-
-
-def draw_fig5b(models):
-    _draw_optional("fig5b_own_rc_hit5", VIRUSES, models, "Mean own-RC hit@5",
-                   "Own reverse complement among the 5 nearest neighbors")
-
-
-def draw_fig5c(models):
-    _draw_optional("fig5c_own_rc_similarity", VIRUSES, models,
-                   "Mean similarity of x and RC(x)",
-                   "Similarity of a fragment and its reverse complement\n"
-                   "(cosine / sketch agreement / 1 - JSD, by model)")
 
 
 # ── Fig. 6: P@k against k ───────────────────────────────────────────────────
@@ -474,9 +428,9 @@ def draw_fig6(models):
         axis.set_title(label)
         axis.set_xticks(list(config.KS))
     axes[0].set_ylabel("Precision@k")
-    axes[0].legend(fontsize=8, ncol=2)
     figure.suptitle("Precision@k as a function of k (held-out viruses)", fontsize=15, y=1.02)
     figure.tight_layout()
+    _legend_below(figure, axes[0])
     save_figure(figure, "fig6_pk_vs_k", kind="main")
     plt.close(figure)
 
@@ -540,7 +494,6 @@ def draw_fig7(models):
 BUILDERS = {
     "fig1": build_fig1, "fig2": build_fig2, "fig4": build_fig4,
     "fig5": build_fig5, "fig6": build_fig6, "fig7": build_fig7,
-    "fig4b": build_fig4b, "fig5b": build_fig5b, "fig5c": build_fig5c,
 }
 
 
@@ -554,8 +507,7 @@ def build_all(models, metrics_dir=None, which=None) -> None:
 
 
 def draw_all(models, which=None) -> None:
-    wanted = set(which or ["fig1", "fig2", "fig3", "fig4", "fig5", "fig6", "fig7",
-                           "fig4b", "fig5b", "fig5c"])
+    wanted = set(which or ["fig1", "fig2", "fig3", "fig4", "fig5", "fig6", "fig7"])
     if "fig1" in wanted:
         draw_fig1(models)
     if "fig2" in wanted:
@@ -570,9 +522,3 @@ def draw_all(models, which=None) -> None:
         draw_fig6(models)
     if "fig7" in wanted:
         draw_fig7(models)
-    if "fig4b" in wanted:
-        draw_fig4b(models)
-    if "fig5b" in wanted:
-        draw_fig5b(models)
-    if "fig5c" in wanted:
-        draw_fig5c(models)

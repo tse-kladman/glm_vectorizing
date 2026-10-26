@@ -28,7 +28,7 @@ import numpy as np
 from tqdm import tqdm
 
 from .. import config, selection
-from ..models import Model, get
+from ..models import Model, get, variant as model_variant
 from ..representations import store
 from . import pairwise, tables, unseen
 
@@ -49,8 +49,7 @@ def _split(model: Model, data, layer):
     return data.get(layer) if model.layered else data
 
 
-def _sample_scores(model: Model, reference_data, virus, virus_rc, ks, keep_layers,
-                   protocol: str):
+def _sample_scores(model: Model, reference_data, virus, virus_rc, ks, keep_layers):
     """All unseen-order scores of one reference sample: ``{kind: {layer: ...}}``."""
     scores = defaultdict(dict)
     for layer in _layers_of(reference_data, virus, model.layered):
@@ -62,25 +61,18 @@ def _sample_scores(model: Model, reference_data, virus, virus_rc, ks, keep_layer
         if not ref_groups or not virus_groups:
             continue
 
-        if protocol in ("genome", "both"):
-            scores["genome"][layer] = unseen.precision_by_genome(
-                ref_groups, virus_groups, ks, model)
-            if rc_groups:
-                scores["cross"][layer] = unseen.precision_rc_proximity(
-                    ref_groups, virus_groups, rc_groups, ks, model)
-        if protocol in ("order", "both"):
-            scores["order"][layer] = unseen.precision_by_order(
-                ref_groups, virus_groups, ks, model)
+        scores["genome"][layer] = unseen.precision_by_genome(
+            ref_groups, virus_groups, ks, model)
         if rc_groups:
-            scores["ownrc"][layer] = unseen.own_rc(ref_groups, virus_groups,
-                                                   rc_groups, ks, model)
+            scores["cross"][layer] = unseen.precision_rc_proximity(
+                ref_groups, virus_groups, rc_groups, ks, model)
     return scores
 
 
 def _run_task(packed):
     """One (model, virus file) over all reference samples; top level, for the pool."""
-    (model_key, virus_name, rc_name, n_ref, ks, latent_dir, keep_layers, protocol) = packed
-    model = get(model_key)
+    (model_key, virus_name, rc_name, n_ref, ks, latent_dir, keep_layers, variant) = packed
+    model = model_variant(get(model_key), variant)
     latent_dir = Path(latent_dir) if latent_dir else None
     problems = []
     key = (model_key, virus_name)
@@ -100,13 +92,11 @@ def _run_task(packed):
             return index, None
         try:
             return index, _sample_scores(model, reference_data, virus, virus_rc,
-                                         ks, keep_layers, protocol)
+                                         ks, keep_layers)
         except ValueError as error:                 # representation/metric mismatch
             return index, error
 
     matrices = defaultdict(lambda: {k: defaultdict(dict) for k in ks})
-    similarity = defaultdict(dict)                  # layer -> sample -> value
-    per_genome = defaultdict(list)                  # kind -> rows
     loaded, missing, failure = [], [], None
 
     with ThreadPoolExecutor(max_workers=config.SAMPLE_THREADS) as pool:
@@ -121,43 +111,16 @@ def _run_task(packed):
                 continue
             loaded.append(index)
             for kind, by_layer in result.items():
-                for layer, payload in by_layer.items():
-                    _absorb(kind, layer, index, payload, ks, matrices, similarity,
-                            per_genome)
+                for layer, per_genome in by_layer.items():
+                    means = unseen.summarise(per_genome, ks)
+                    for k in ks:
+                        matrices[kind][k][layer][index] = means[k]
 
     return key, {"matrices": {kind: {k: {layer: dict(v) for layer, v in per_k.items()}
                                      for k, per_k in by_k.items()}
                               for kind, by_k in matrices.items()},
-                 "similarity": {layer: dict(v) for layer, v in similarity.items()},
-                 "per_genome": dict(per_genome),
                  "loaded": sorted(loaded), "missing": sorted(missing),
                  "problems": problems, "error": failure}
-
-
-def _absorb(kind, layer, sample, payload, ks, matrices, similarity, per_genome) -> None:
-    """Fold one sample's per-genome payload into the running tables."""
-    if kind == "ownrc":
-        hits, sims = payload
-        means = unseen.summarise(hits, ks)
-        for k in ks:
-            matrices[kind][k][layer][sample] = means[k]
-        if sims:
-            similarity[layer][sample] = float(np.nanmean(list(sims.values())))
-        for genome, by_k in hits.items():
-            for k in config.PER_GENOME_KS:
-                if k in by_k:
-                    per_genome[kind].append((layer, sample, genome, f"hit@{k}", by_k[k]))
-        for genome, value in sims.items():
-            per_genome[kind].append((layer, sample, genome, "similarity", value))
-        return
-
-    means = unseen.summarise(payload, ks)
-    for k in ks:
-        matrices[kind][k][layer][sample] = means[k]
-    for genome, by_k in payload.items():
-        for k in config.PER_GENOME_KS:
-            if k in by_k:
-                per_genome[kind].append((layer, sample, genome, f"P@{k}", by_k[k]))
 
 
 def _run_pairwise_task(packed):
@@ -224,13 +187,16 @@ def _keep_layers(model: Model, layers_mode: str):
     return {selection.layer_label(model, entry["layer"])}
 
 
-def build_tasks(models, viruses, n_ref, ks, latent_dir, layers_mode, metrics_dir,
-                protocol="both"):
-    """One task per (model, virus file); RC files are scored as viruses of their own."""
+def build_tasks(models, viruses, n_ref, ks, latent_dir, layers_mode, variant=None):
+    """One task per (model, virus file); RC files are scored as viruses of their own.
+
+    ``variant`` (a key of ``models.SCALING_DISTANCE``) scores the model under another
+    feature scaling / distance.
+    """
     tasks = []
     for model in models:
         keep = _keep_layers(model, layers_mode)
-        shared = (n_ref, tuple(ks), str(latent_dir) if latent_dir else None, keep, protocol)
+        shared = (n_ref, tuple(ks), str(latent_dir) if latent_dir else None, keep, variant)
         for name, rc_name in viruses:
             tasks.append((model.key, name, rc_name, *shared))
             if rc_name:
@@ -252,7 +218,7 @@ def build_pairwise_tasks(models, viruses, n_ref, latent_dir, layers_mode):
 
 # ── writing ─────────────────────────────────────────────────────────────────
 
-MATRIX_PREFIX = {"genome": "P", "order": "Porder", "cross": "cross_P", "ownrc": "ownrc_hit"}
+MATRIX_PREFIX = {"genome": "P", "cross": "cross_P"}
 
 
 def write(result: dict, model_key: str, virus: str, ks, metrics_dir=None) -> None:
@@ -262,18 +228,12 @@ def write(result: dict, model_key: str, virus: str, ks, metrics_dir=None) -> Non
             if by_k.get(k):
                 tables.save_matrix(by_k[k], directory / tables.matrix_name(
                     MATRIX_PREFIX[kind], k, virus))
-    if result["similarity"]:
-        tables.save_matrix(result["similarity"],
-                           directory / tables.own_rc_similarity_name(virus))
-    for kind, rows in result["per_genome"].items():
-        if rows:
-            tables.save_per_genome(rows, directory / tables.per_genome_name(kind, virus))
 
 
 def summarise(result: dict, model_key: str, virus: str, ks) -> list:
     """One row per (k, kind): the best layer by mean and its spread."""
     rows = []
-    names = {"genome": "forward", "order": "order", "cross": "cross", "ownrc": "own_rc"}
+    names = {"genome": "forward", "cross": "cross"}
     for kind, by_k in result["matrices"].items():
         for k in ks:
             matrix = by_k.get(k)
@@ -307,20 +267,19 @@ def _report(problems: list, allow_missing: bool) -> None:
 
 def run(models, viruses, n_ref=config.N_REFERENCE, ks=config.KS, latent_dir=None,
         metrics_dir=None, layers_mode="all", max_workers=None, dry_run=False,
-        protocol="both", allow_missing=False, with_pairwise=True):
+        allow_missing=False, with_pairwise=True, variant=None):
     """Compute every unseen-order metric and write the tables; returns summary rows.
 
     Raises ``SystemExit`` (non-zero) if anything was missing, corrupt or skipped,
     unless ``allow_missing``; the tables of an affected task are then not written.
     """
     ks = tuple(ks)
-    tasks = build_tasks(models, viruses, n_ref, ks, latent_dir, layers_mode,
-                        metrics_dir, protocol)
+    tasks = build_tasks(models, viruses, n_ref, ks, latent_dir, layers_mode, variant)
     pair_tasks = (build_pairwise_tasks(models, viruses, n_ref, latent_dir, layers_mode)
                   if with_pairwise else [])
     print(f"tasks: {len(tasks)} per-order + {len(pair_tasks)} pairwise  "
           f"({len(models)} models, n_ref={n_ref}, layers={layers_mode}, "
-          f"protocol={protocol})")
+          f"{f'variant={variant}' if variant else 'main tables'})")
     if dry_run:
         for task in tasks:
             print(f"  {task[0]:<10} {task[1]}")

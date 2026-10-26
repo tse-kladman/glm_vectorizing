@@ -144,23 +144,30 @@ def test_a_missing_input_fasta_is_a_failure_not_a_skip(tmp_path):
 def test_kmer_extraction_records_how_the_vectors_were_made(tmp_path):
     path = tmp_path / "sample_0.fa"
     path.write_text(">cls_0\n" + "ACGT" * 100 + "\n")
-    extract.extract_model(models.get("kmer_canon"), [(path, "sample_0")],
+    extract.extract_model(models.get("kmer"), [(path, "sample_0")],
                           latent_dir=tmp_path / "latent", seed=9)
-    info = json.loads((tmp_path / "latent" / "kmer_canon" / "extraction.json").read_text())
+    info = json.loads((tmp_path / "latent" / "kmer" / "extraction.json").read_text())
     assert info["k"] == 4 and info["seed"] == 9
 
 
 # ── ViraLM ──────────────────────────────────────────────────────────────────
 
-def test_viralm_fails_early_with_instructions_when_the_hook_is_missing(tmp_path, monkeypatch):
-    monkeypatch.setattr(config, "CODE_ROOT", tmp_path)               # a checkout without the hook
+def test_viralm_fails_early_with_instructions_when_the_model_is_missing(tmp_path, monkeypatch):
+    monkeypatch.setattr(config, "CODE_ROOT", tmp_path)               # a checkout without ViraLM
     path = tmp_path / "sample_0.fa"
     path.write_text(">a_0\nACGT\n")
+    with pytest.raises(SystemExit, match="viralm_hook.py"):
+        extract.extract_model(models.get("viralm"), [(path, "sample_0")],
+                              latent_dir=tmp_path / "latent")
+
+    hook = tmp_path / transformers.VIRALM_HOOK_DIR / transformers.VIRALM_HOOK_SCRIPT
+    hook.parent.mkdir(parents=True)
+    hook.write_text("# stub\n")
     with pytest.raises(SystemExit) as stop:
         extract.extract_model(models.get("viralm"), [(path, "sample_0")],
                               latent_dir=tmp_path / "latent")
     message = str(stop.value)
-    assert "viralm_hook.py" in message
+    assert "ViraLM/model" in message
     assert "github.com/ChengPENG-wolf/ViraLM" in message
     assert "licence" in message
     assert not (tmp_path / "latent" / "viralm" / "sample_0_layer_1.pkl").exists()
@@ -170,6 +177,7 @@ def test_the_viralm_hook_is_run_with_the_documented_command_line(tmp_path, monke
     hook = tmp_path / transformers.VIRALM_HOOK_DIR / transformers.VIRALM_HOOK_SCRIPT
     hook.parent.mkdir(parents=True)
     hook.write_text("# stub\n")
+    (hook.parent / "model").mkdir()
     monkeypatch.setattr(config, "CODE_ROOT", tmp_path)
 
     seen = {}

@@ -77,47 +77,20 @@ def test_runner_scores_every_kind_of_representation(latent, tmp_path):
 
     forward = [row for row in rows if row["virus"] == VIRUS]
     assert {row["k"] for row in forward} == set(range(1, 11))
-    assert {row["type"] for row in forward} == {"forward", "order", "cross", "own_rc"}
+    assert {row["type"] for row in forward} == {"forward", "cross"}
 
 
 def test_runner_writes_tables_of_the_expected_shape(latent, tmp_path):
     run(["dnabert2"], latent, tmp_path)
     directory = tables.model_dir("dnabert2", tmp_path / "metrics")
 
-    for prefix in ("P", "Porder", "cross_P"):
+    for prefix in ("P", "cross_P"):
         matrix = tables.load_matrix(directory / tables.matrix_name(prefix, 5, VIRUS))
         assert len(matrix) == LAYERS                          # one row per layer
         assert list(matrix.columns) == list(range(N_SAMPLES))  # one column per sample
         assert matrix.to_numpy().min() >= 0
-    assert (directory / tables.own_rc_names(5, VIRUS)).exists()
-    assert (directory / tables.own_rc_similarity_name(VIRUS)).exists()
-
-
-def test_per_genome_values_are_stored(latent, tmp_path):
-    run(["kmer_js"], latent, tmp_path)
-    directory = tables.model_dir("kmer_js", tmp_path / "metrics")
-
-    for kind in ("genome", "order", "cross", "ownrc"):
-        frame = tables.load_per_genome(directory / tables.per_genome_name(kind, VIRUS))
-        assert set(frame["genome"]) == set(GENOMES) or \
-            set(frame["genome"]) == {f"REVERSECOMPLEMENT{g}" for g in GENOMES}
-        assert set(frame["sample"]) == set(range(N_SAMPLES))
-        assert frame["value"].between(0, 1).all()
-
-    # the per-genome values average back to the per-sample table
-    frame = tables.load_per_genome(directory / tables.per_genome_name("genome", VIRUS))
-    matrix = tables.load_matrix(directory / tables.matrix_name("P", 5, VIRUS))
-    mean = frame[frame["metric"] == "P@5"].groupby("sample")["value"].mean()
-    np.testing.assert_allclose(mean.to_numpy(), matrix.loc["-"].to_numpy())
-
-
-def test_protocol_selects_which_tables_are_written(latent, tmp_path):
-    run(["kmer_js"], latent, tmp_path, protocol="order")
-    directory = tables.model_dir("kmer_js", tmp_path / "metrics")
-    assert (directory / tables.matrix_name("Porder", 5, VIRUS)).exists()
-    assert not (directory / tables.matrix_name("P", 5, VIRUS)).exists()
-    assert not (directory / tables.matrix_name("cross_P", 5, VIRUS)).exists()
-    assert (directory / tables.own_rc_names(5, VIRUS)).exists()       # strand metric: always
+    assert sorted(path.name.split("@")[0] for path in directory.glob("*.xlsx")) == \
+        ["P"] * 20 + ["cross_P"] * 10                         # fwd + RC P@k, fwd cross_P@k
 
 
 def test_selected_layers_restrict_the_work(latent, tmp_path, monkeypatch):
@@ -127,6 +100,32 @@ def test_selected_layers_restrict_the_work(latent, tmp_path, monkeypatch):
     matrix = tables.load_matrix(tables.model_dir("dnabert2", tmp_path / "metrics")
                                 / tables.matrix_name("P", 5, VIRUS))
     assert list(matrix.index) == [1]
+
+
+def test_a_scaling_distance_variant_changes_the_distance_not_the_tables(latent, tmp_path):
+    """Fig. 8: the same tables under another scaling / distance."""
+    run(["dnabert2"], latent, tmp_path, with_pairwise=False)
+    base = tables.model_dir("dnabert2", tmp_path / "metrics")
+    for variant in models.SCALING_DISTANCE:
+        out = tables.scaling_distance_dir(variant, tmp_path / "metrics")
+        runner.run(models.resolve(["dnabert2"]), [(VIRUS, RC)], n_ref=N_SAMPLES,
+                   latent_dir=latent, metrics_dir=out, max_workers=1,
+                   with_pairwise=False, variant=variant)
+        directory = tables.model_dir("dnabert2", out)
+        name = tables.matrix_name("P", 5, VIRUS)
+        matrix = tables.load_matrix(directory / name)
+        assert matrix.shape == (LAYERS, N_SAMPLES)
+        assert (directory / tables.matrix_name("cross_P", 5, VIRUS)).exists()
+        assert not np.allclose(matrix.to_numpy(), tables.load_matrix(base / name).to_numpy())
+
+
+def test_variants_are_defined_for_the_standardised_cosine_models_only():
+    raw = models.variant(models.get("evo2"), "raw_euclidean")
+    assert (raw.transform, raw.metric, raw.key) == ("none", "euclidean", "evo2")
+    assert models.variant(models.get("kmer"), None) is models.get("kmer")
+    for key in ("kmer_js", "minhash"):
+        with pytest.raises(ValueError, match="standardised cosine"):
+            models.variant(models.get(key), "raw_cosine")
 
 
 def test_selected_layer_is_translated_from_position_to_label_for_viralm():
@@ -175,16 +174,6 @@ def test_a_missing_virus_file_fails_the_run(latent, tmp_path, capsys):
     with pytest.raises(SystemExit):
         run(["kmer_js"], latent, tmp_path)
     assert "missing" in capsys.readouterr().out
-
-
-def test_misaligned_rc_file_is_reported(latent, tmp_path, capsys):
-    path = latent / "kmer_js" / f"{RC}.pickle"
-    data = pickle.load(open(path, "rb"))
-    data["REVERSECOMPLEMENTgA"] = data["REVERSECOMPLEMENTgA"][:-1]
-    _dump(path, data)
-    with pytest.raises(SystemExit):
-        run(["kmer_js"], latent, tmp_path)
-    assert "not aligned" in capsys.readouterr().out
 
 
 def test_store_reports_corrupt_files_in_the_problem_list(tmp_path):

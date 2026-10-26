@@ -1,363 +1,188 @@
-from transformers import AutoTokenizer, AutoModelForSequenceClassification
-from concurrent.futures import ProcessPoolExecutor, as_completed
-from torch.utils.data import DataLoader
-from datasets import load_dataset
-from torch.utils.data import Dataset
-from typing import Dict, Sequence
-from dataclasses import dataclass
-from torch.nn import Softmax
-from Bio import SeqIO
-from torch import nn
-import transformers
-import numpy as np
-import threading
+"""ViraLM hidden states per encoder layer -- run it inside the ``viralm`` conda environment.
+
+Adapted from the prediction script of ViraLM (https://github.com/ChengPENG-wolf/ViraLM):
+the input is cut into ViraLM's own 1,000-nt windows and pushed through the fine-tuned
+model, but instead of the virus score the hidden states of the requested encoder
+layers are kept.  The pipeline calls it through ``conda run`` with this folder as the
+working directory (``glmbench/representations/transformers.py``); the ViraLM model
+files are expected in ``./model`` (``--model_pth``).
+
+Output, for every requested layer L (1..12): ``<output_pth>/<FASTA stem>_layer_<L>.pkl``,
+a pickled ``{"<record id>_<start>_<end>": vector}`` with one entry per window, in FASTA
+order.  The vector is the mean of the layer's token states.  A 2,000-nt fragment gives
+two windows; ``glmbench/representations/store.py`` averages them into one vector per
+fragment.
+
+``--batch_size`` must be 1: the encoder works on unpadded tokens, so the hidden state of
+a batch is one (tokens, width) array, and its mean would mix the windows of the batch.
+"""
+
 import argparse
-import torch
 import csv
-import re
 import os
-import shutil
+import pickle
+import re
+from dataclasses import dataclass
+from typing import Dict, Sequence
+
+import numpy as np
+import torch
 import tqdm
-import pickle 
+import transformers
+from Bio import SeqIO
+from datasets import load_dataset
+from torch.utils.data import DataLoader
+from transformers import AutoModelForSequenceClassification, AutoTokenizer
+
+WINDOW = 1000          # ViraLM's window length
+MIN_TAIL = 500         # a shorter tail of a sequence is dropped
+
 
 def parse_args():
-    parser = argparse.ArgumentParser(description='ViraLM sequence analysis parameters')
-    
-    parser.add_argument('--input_pth', type=str,
-                       help='Input file path')
-    parser.add_argument('--output_pth', type=str, default="./TMP/",
-                       help='Output directory path')
-    parser.add_argument('--model_pth', type=str, default="./model",
-                       help='Model directory path')
-    parser.add_argument('--batch_size', type=int, default=1,
-                       help='Batch size for processing')
-    parser.add_argument('--len_threshold', type=int, default=500,
-                       help='Length threshold for sequences')
-    parser.add_argument('--score_threshold', type=float, default=0.5,
-                       help='Score threshold for predictions')
-    parser.add_argument('--cpu_threads', type=int, default=1,
-                       help='Number of CPU threads to use')
-    parser.add_argument('--filename', type=str, default="results",
-                       help='Custom output filename')
-    parser.add_argument('--layers_to_monitor', type=int, nargs='+', default=[1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12],
-                       help='List of layers to monitor (space-separated integers)')
-    
+    parser = argparse.ArgumentParser(description="ViraLM hidden states per encoder layer")
+    parser.add_argument("--input_pth", type=str, required=True, help="input FASTA")
+    parser.add_argument("--output_pth", type=str, default="./TMP/",
+                        help="output directory")
+    parser.add_argument("--model_pth", type=str, default="./model",
+                        help="directory of the ViraLM model files")
+    parser.add_argument("--batch_size", type=int, default=1,
+                        help="must be 1 (see the module docstring)")
+    parser.add_argument("--len_threshold", type=int, default=500,
+                        help="sequences shorter than this are skipped")
+    parser.add_argument("--cpu_threads", type=int, default=1,
+                        help="data-loader workers (at most 4)")
+    parser.add_argument("--filename", type=str, default="results",
+                        help="name of the temporary window table")
+    parser.add_argument("--layers_to_monitor", type=int, nargs="+",
+                        default=list(range(1, 13)),
+                        help="encoder layers to dump, numbered 1..12")
     return parser.parse_args()
 
 
+def only_acgt(text, search=re.compile(r"[^ACGT]").search) -> bool:
+    return not bool(search(text))
 
 
-
-def special_match(strg, search=re.compile(r'[^ACGT]').search):
-    return not bool(search(strg))
-
-
-def preprocee_data(input_pth, cache_dir, len_threshold, filename):
-    # ViraLM's own 1,000-nt windows: a 2,000-nt fragment gives two entries.  They are
-    # averaged back into one vector per fragment in glmbench/representations/store.py
-    # (_viralm_groups); scoring the windows as separate points inflates ViraLM's metrics.
-    frag_len = 1000
-    
-    # Create file in cache_dir
-    temp_file_path = f"{cache_dir}/{filename}_temp.csv"
-    with open(temp_file_path, "w") as f:
-        f.write(f'sequence,accession\n')
+def write_windows(input_pth, table_path, len_threshold):
+    """Cut every record into WINDOW-nt windows (plus a tail of at least MIN_TAIL nt);
+    windows with a letter other than A/C/G/T are skipped."""
+    with open(table_path, "w") as handle:
+        handle.write("sequence,accession\n")
         for record in SeqIO.parse(input_pth, "fasta"):
-            global seq
             sequence = str(record.seq).upper()
-            seq = sequence
             if len(sequence) < len_threshold:
                 continue
-            if len(sequence) >= frag_len:
-                last_pos = 0
-                for i in range(0, len(sequence) - frag_len + 1, 1000):
-                    sequence1 = sequence[i:i + frag_len]
-                    if special_match(sequence1):
-                        f.write(f'{sequence1},{f"{record.id}_{i}_{i+frag_len}"}\n')
-                    last_pos = i + frag_len
-                if len(sequence) - last_pos >= 500:
-                    sequence1 = sequence[last_pos:]
-                    if special_match(sequence1):
-                        f.write(f'{sequence1},{f"{record.id}_{last_pos}_{len(record.seq)}"}\n')
-            elif len(sequence) >= len_threshold:
-                if special_match(sequence):
-                    f.write(f'{sequence},{f"{record.id}_{0}_{0+len(sequence)}"}\n')
-
-class SupervisedDataset(Dataset):
-    """Dataset for supervised fine-tuning."""
-
-    def __init__(self,
-                 data_path: str,
-                 tokenizer: transformers.PreTrainedTokenizer):
-
-        super(SupervisedDataset, self).__init__()
-
-        # load data from the disk
-        with open(data_path, "r") as f:
-            data = list(csv.reader(f))[1:]
-        if len(data[0]) == 2:
-            # data is in the format of [text, label]
-            texts = [d[0] for d in data]
-            labels = [int(d[1]) for d in data]
-
-        output = tokenizer(
-            texts,
-            return_tensors="pt",
-            padding="longest",
-            max_length=tokenizer.model_max_length,
-            truncation=True,
-        )
-
-        self.input_ids = output["input_ids"]
-        self.attention_mask = output["attention_mask"]
-        self.labels = labels
-
-    def __len__(self):
-        return len(self.input_ids)
-
-    def __getitem__(self, i) -> Dict[str, str]:
-        return dict(input_ids=self.input_ids[i], labels=self.labels[i])
+            if len(sequence) >= WINDOW:
+                last = 0
+                for start in range(0, len(sequence) - WINDOW + 1, WINDOW):
+                    window = sequence[start:start + WINDOW]
+                    if only_acgt(window):
+                        handle.write(f"{window},{record.id}_{start}_{start + WINDOW}\n")
+                    last = start + WINDOW
+                if len(sequence) - last >= MIN_TAIL:
+                    window = sequence[last:]
+                    if only_acgt(window):
+                        handle.write(f"{window},{record.id}_{last}_{len(record.seq)}\n")
+            elif only_acgt(sequence):
+                handle.write(f"{sequence},{record.id}_0_{len(sequence)}\n")
 
 
 @dataclass
-class DataCollatorForSupervisedDataset(object):
-    """Collate examples for supervised fine-tuning."""
+class Collator:
+    """Pads the token ids of a batch and keeps the window names as labels."""
 
     tokenizer: transformers.PreTrainedTokenizer
 
     def __call__(self, instances: Sequence[Dict]) -> Dict[str, torch.Tensor]:
-        input_ids, labels = tuple([instance[key] for instance in instances] for key in ("input_ids", "accession"))
+        input_ids = [instance["input_ids"] for instance in instances]
+        labels = [instance["accession"] for instance in instances]
         input_ids = torch.nn.utils.rnn.pad_sequence(
-            input_ids, batch_first=True, padding_value=self.tokenizer.pad_token_id
-        )
-        labels = labels
-        return dict(
-            input_ids=input_ids,
-            labels=labels,
-            attention_mask=input_ids.ne(self.tokenizer.pad_token_id),
-        )
-
-def tokenize_function(examples):
-    return tokenizer(examples["sequence"], truncation=True)
+            input_ids, batch_first=True, padding_value=self.tokenizer.pad_token_id)
+        return dict(input_ids=input_ids, labels=labels,
+                    attention_mask=input_ids.ne(self.tokenizer.pad_token_id))
 
 
-
-
-def cpu_worker(batch, model, device):
-    result = {}
-    with torch.no_grad():
-        labels = batch['labels']
-        batch.pop('labels')
-        batch = {k: v.to(device) for k, v in batch.items()}
-
-        outputs = model(**batch)
-        logits = outputs.logits.cpu().numpy()
-        #predictions = np.argmax(logits, axis=-1)
-
-        for i in torch.arange(len(labels)):
-            value = softmax(torch.tensor([logits[i][0], logits[i][1]])).tolist()
-            segment_name = labels[i]
-            seq_name = segment_name.rsplit('_', 2)[0]
-            if seq_name not in result:
-                result[seq_name] = []
-            result[seq_name].append(value[1])
-    return result
-
-
-
-
-def get_hook(layer_name):
-        def hook(module, input, output):
-            if isinstance(output, tuple):
-                output = output[0]
-            hidden_states_dict[layer_name] = output.detach().cpu()
-        return hook
-
-    
-def setup_hooks(model, layer_indices=None):
-    """Register hooks for specified layers"""
-    hidden_states_dict = {}
-    
-    
-    # Default to last layer if none specified
-    if layer_indices is None:
-        layer_indices = [12]  # Default to layer 11 (12th layer)
-    
-    # Handle both DataParallel and regular model
-    bert_model = model.module.bert if hasattr(model, 'module') else model.bert
-    
-    # Register hooks for each specified layer
-    for layer_idx in layer_indices:
-        layer_name = f'layer_{layer_idx}'
-        bert_model.encoder.layer[layer_idx-1].register_forward_hook(get_hook(layer_name))
-    
-    # Always hook embeddings for reference
-    bert_model.embeddings.register_forward_hook(get_hook('embeddings'))
-    
-    return hidden_states_dict
-
-def initialize_test_loader():
-    data_collator = DataCollatorForSupervisedDataset(tokenizer=tokenizer)
-    
-    # Загружаем CSV как датасет
-    test_dataset = load_dataset(
-        'csv',
-        data_files={'test': f'{cache_dir}/{filename}_temp.csv'},
-        cache_dir=cache_dir
-    )
-
-    # Берём только первые 34 000 строк (если меньше — возьмёт все)
-    test_dataset['test'] = test_dataset['test']#.select(range(34000, len(test_dataset['test'])))
-
-    # Токенизация
-    tokenized_datasets = test_dataset.map(
-        tokenize_function,
-        batched=True,
-        batch_size=512,
-        remove_columns=["sequence"]
-    )
-
-    # Формат под PyTorch
-    tokenized_datasets = tokenized_datasets.with_format("torch")
-
-    # DataLoader с pin_memory и num_workers для ускорения
-    test_loader = DataLoader(
-        tokenized_datasets["test"],
-        batch_size=batch_size,
-        collate_fn=data_collator,
-        pin_memory=True,
-        num_workers=min(cpu_threads, 4)
-    )
-
-    return test_loader
-
-
-def initialize_model():
-    global model, tokenizer, device
-
+def load_model(model_pth, cache_dir):
     model = AutoModelForSequenceClassification.from_pretrained(
-        model_pth,
-        num_labels=2,
-        trust_remote_code=True,
-        cache_dir=cache_dir
-    )
-
+        model_pth, num_labels=2, trust_remote_code=True, cache_dir=cache_dir)
     tokenizer = AutoTokenizer.from_pretrained(
-        model_pth,
-        model_max_length=512,
-        padding_side="right",
-        truncation=False,
-        use_fast=True,
-        trust_remote_code=True,
-    )
-
-    # Initialize device
+        model_pth, model_max_length=512, padding_side="right", truncation=False,
+        use_fast=True, trust_remote_code=True)
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    print(f'\nRunning on {device}.')
-    
-    # Model setup
+    print(f"\nRunning on {device}.")
     model.to(device)
     if torch.cuda.device_count() > 1:
-        print(f'Using {torch.cuda.device_count()} GPUs.')
+        print(f"Using {torch.cuda.device_count()} GPUs.")
         model = torch.nn.DataParallel(model)
-    
-    # Specify which layers you want to monitor (0-based or 1-based indices)
-    # Example: [1, 6, 11] for layers 1, 6, and 11 (12th layer)
-    layers_to_monitor = list(range(1, 13))  # Change this list to monitor different layers
-    hidden_states_dict = setup_hooks(model, layers_to_monitor)
-    
-    
     return model, tokenizer, device
 
-# Predict
 
-def make_prediction(model, test_loader):
-    softmax = Softmax(dim=0)
+def register_hooks(model, layers, states: dict) -> None:
+    """Store the output of every requested encoder layer in ``states["layer_<L>"]``."""
+    def hook_for(name):
+        def hook(module, inputs, output):
+            if isinstance(output, tuple):
+                output = output[0]
+            states[name] = output.detach().cpu()
+        return hook
+
+    bert = model.module.bert if hasattr(model, "module") else model.bert
+    for layer in layers:
+        bert.encoder.layer[layer - 1].register_forward_hook(hook_for(f"layer_{layer}"))
+
+
+def make_loader(table_path, cache_dir, tokenizer, batch_size, cpu_threads):
+    dataset = load_dataset("csv", data_files={"test": table_path}, cache_dir=cache_dir)
+    tokenized = dataset.map(lambda batch: tokenizer(batch["sequence"], truncation=True),
+                            batched=True, batch_size=512, remove_columns=["sequence"])
+    return DataLoader(tokenized.with_format("torch")["test"], batch_size=batch_size,
+                      collate_fn=Collator(tokenizer=tokenizer), pin_memory=True,
+                      num_workers=min(cpu_threads, 4))
+
+
+def collect(model, loader, device, layers, states: dict):
+    """Per batch: the window names and the hidden state of every requested layer."""
     model.eval()
-    result = {}
-    outputses = []
-    states = []
-    labelses = []
-    if torch.cuda.is_available():
-        with torch.no_grad():
-            for step, batch in tqdm.tqdm(enumerate(test_loader)):
-                # Clear previous hidden states
-                hidden_states_dict.clear()
-                
-                labels = batch['labels']
-                labelses.append(labels)
-                batch.pop('labels')
-                batch = {k: v.to(device) for k, v in batch.items()}
-    
-                outputs = model(**batch)
-                outputses.append(outputs)
-                logits = outputs.logits.detach().cpu().numpy()
-                
-                # Print outputs for all monitored layers
-                int_states = []
-                for layer_idx in layers_to_monitor:
-                    layer_name = f'layer_{layer_idx}'
-                    int_states.append(hidden_states_dict.get(layer_name, None))
-                states.append(int_states)
-                
-                # Your existing processing
-                for i in torch.arange(len(labels)):
-                    value = softmax(torch.tensor([logits[i][0], logits[i][1]])).tolist()
-                    segment_name = labels[i]
-                    seq_name = segment_name.rsplit('_', 2)[0]
-                    if seq_name not in result:
-                        result[seq_name] = []
-                    result[seq_name].append(value[1])
-    else:
-        # For CPU version
-        tasks = []
-        tasks = [pool.submit(cpu_worker, batch, model, device) for batch in test_loader]
-        pool.shutdown(wait=True)
-        for task in as_completed(tasks):
-            predictions = task.result()
-            for seq_name in predictions:
-                if seq_name not in result:
-                    result[seq_name] = []
-                result[seq_name].extend(predictions[seq_name])
-    return states, labelses
-
-args = parse_args()
-input_pth = args.input_pth
-output_pth = args.output_pth
-model_pth = args.model_pth
-batch_size = args.batch_size
-len_threshold = args.len_threshold
-score_threshold = args.score_threshold
-cpu_threads = args.cpu_threads
-filename = args.filename
-layers_to_monitor = args.layers_to_monitor
+    names, per_layer = [], []
+    with torch.no_grad():
+        for batch in tqdm.tqdm(loader):
+            states.clear()
+            names.append(batch.pop("labels"))
+            model(**{key: value.to(device) for key, value in batch.items()})
+            per_layer.append([states.get(f"layer_{layer}") for layer in layers])
+    return names, per_layer
 
 
+def main():
+    args = parse_args()
+    if args.batch_size != 1:
+        raise SystemExit("--batch_size must be 1: the mean over a batch mixes its windows")
 
-seq = ''
-# Create output directory if it doesn't exist
-os.makedirs(output_pth, exist_ok=True)
-cache_dir = f'{output_pth}/cache'
-os.makedirs(cache_dir, exist_ok=True)
+    os.makedirs(args.output_pth, exist_ok=True)
+    cache_dir = f"{args.output_pth}/cache"
+    os.makedirs(cache_dir, exist_ok=True)
+    table_path = f"{cache_dir}/{args.filename}_temp.csv"
 
-model, tokenizer, device = initialize_model()
+    model, tokenizer, device = load_model(args.model_pth, cache_dir)
+    write_windows(args.input_pth, table_path, args.len_threshold)
+    with open(table_path) as handle:
+        if len(list(csv.reader(handle))) < 2:
+            raise SystemExit(f"no window of {args.input_pth} passed the filters")
+
+    states = {}
+    register_hooks(model, args.layers_to_monitor, states)
+    loader = make_loader(table_path, cache_dir, tokenizer, args.batch_size, args.cpu_threads)
+    names, per_layer = collect(model, loader, device, args.layers_to_monitor, states)
+
+    stem = args.input_pth.split("/")[-1].split(".")[0]
+    for index, layer in enumerate(args.layers_to_monitor):
+        path = f"{args.output_pth}/{stem}_layer_{layer}.pkl"
+        with open(path, "wb") as handle:
+            pickle.dump({batch_names[0]: np.mean(np.array(hidden[index]), axis=0)
+                         for batch_names, hidden in zip(names, per_layer)}, handle)
+        print(path)
+    os.remove(table_path)
 
 
-
-temp_file_path = f"{cache_dir}/{filename}_temp.csv"
-if not os.path.exists(temp_file_path):
-    print(f"Error: File {temp_file_path} was not created by preprocee_data.")
-
-
-preprocee_data(input_pth, cache_dir, len_threshold, filename)
-test_loader = initialize_test_loader()
-hidden_states_dict = setup_hooks(model, layer_indices=layers_to_monitor)
-states, labelses = make_prediction(model, test_loader)
-
-
-file_suffix = input_pth.split('/')[-1].split('.')[0]
-for i, layer in enumerate(layers_to_monitor):
-    with open(f'{output_pth}/{file_suffix}_layer_{layer}.pkl', 'wb') as f:
-        pickle.dump({l[0]:np.mean(np.array(a[i]), axis=0) for l, a in zip(labelses, states)}, f)
-        print(f'{output_pth}/{file_suffix}_layer_{layer}.pkl')
-os.remove(temp_file_path)
+if __name__ == "__main__":
+    main()

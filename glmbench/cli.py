@@ -2,10 +2,12 @@
 
     prep       genomes            -> fragments and their reverse complements
     samples    VMR + genomes      -> the 50 reference samples
+    sweep      reference samples  -> ARI / P@5 / silhouette of the k-mer profile per k
     extract    fragments          -> vectors, one folder per model
     benchmark  reference samples  -> ARI / P@5 / silhouette per layer
     select     reference samples  -> the layer and word length of each model
-    metrics    vectors            -> the metric tables
+    metrics    vectors            -> the metric tables (and, with --scaling-distance,
+                                     the same under other scaling / distances)
     stats      metric tables      -> paired tests between models
     figures    metric tables      -> every plot
     all        the whole chain
@@ -40,7 +42,8 @@ EPILOG = textwrap.dedent("""
       run_pipeline.py extract --models kmer evo2   just those two
       run_pipeline.py benchmark --models kmer      ARI / P@5 / silhouette on the reference samples
       run_pipeline.py select                       pick layers and word lengths
-      run_pipeline.py metrics --protocol order     leave-genome-out order-level P@k only
+      run_pipeline.py metrics --scaling-distance --layers selected
+                                                   the tables of Fig. 8
       run_pipeline.py figures --which main         redraw the article figures
       run_pipeline.py metrics --dry-run            show the work without doing it
 """)
@@ -243,12 +246,12 @@ def stage_select(args) -> None:
                 print(f"  {model.key}: no reference samples in "
                       f"{config.relative(config.REFERENCE_DIR)}, word length not swept")
                 continue
-            table = selection.sweep_k(model, args.k_values, n_ref=args.n_ref,
+            table = selection.sweep_k(model, args.k_values, n_ref=args.sweep_samples,
+                                      k_neighbours=args.k_neighbours,
                                       max_workers=args.max_workers, seed=args.seed)
             means = table.mean(axis=1, skipna=True)
             best = int(means.idxmax())
-            path = (Path(args.metrics_dir or config.METRICS) / "k_sweep"
-                    / f"{model.key}_k_sweep.xlsx")
+            path = tables.k_sweep_path(model, args.metrics_dir)
             path.parent.mkdir(parents=True, exist_ok=True)
             table.to_excel(path)
             for k, score in means.items():
@@ -279,21 +282,53 @@ def stage_select(args) -> None:
         print(f"  {key:<10} {value}")
 
 
+def stage_sweep(args) -> None:
+    """ARI, P@5 and silhouette of the k-mer profile at every word length (Fig. S1a)."""
+    model = registry.get("kmer")
+    k_values = getattr(args, "sweep_k_values", None) or list(range(1, 11))
+    if args.dry_run:
+        print(f"  {model.key}: would benchmark k = {k_values} on {args.n_ref} "
+              f"reference samples")
+        return
+    path = tables.kmer_sweep_path(args.metrics_dir)
+    if path.exists() and not args.force:
+        print(f"  {config.relative(path)} exists (use --force to recompute)")
+        return
+    summary, raw = selection.sweep_benchmark(model, k_values, n_ref=args.n_ref,
+                                             max_workers=args.max_workers, seed=args.seed)
+    selection.save_sweep_benchmark(summary, raw, path)
+    print(summary.to_string(index=False, float_format="%.4f"))
+    print(f"sweep -> {config.relative(path)}")
+
+
 def stage_metrics(args) -> None:
     """Score every model on the unseen orders."""
     prepared = _viruses()
     viruses = [(forward, reverse) for forward, reverse in prepared.values()]
-    rows = runner.run(_models_with_vectors(args), viruses, n_ref=args.n_ref,
-                      latent_dir=args.latent_dir, metrics_dir=args.metrics_dir,
-                      layers_mode=args.layers, max_workers=args.max_workers,
-                      dry_run=args.dry_run, protocol=args.protocol,
-                      allow_missing=args.allow_missing,
-                      with_pairwise=not args.no_pairwise)
-    if rows:
-        directory = Path(args.metrics_dir) if args.metrics_dir else config.METRICS
-        path = directory / "summary_unseen.xlsx"
-        pd.DataFrame(rows).to_excel(path, index=False)
-        print(f"summary -> {config.relative(path)}  ({len(rows)} rows)")
+    models = _models_with_vectors(args)
+    variants = [None]
+    if args.scaling_distance:
+        # Fig. 8 reads the P@k of the models compared by standardised cosine; only
+        # those have the variants, and no pairwise tables are needed.
+        skipped = [model.key for model in models if model.metric != "cosine"]
+        if skipped:
+            print(f"  no scaling/distance variants for: {', '.join(skipped)}")
+        models = [model for model in models if model.metric == "cosine"]
+        variants = list(registry.SCALING_DISTANCE)
+
+    for variant in variants:
+        metrics_dir = (tables.scaling_distance_dir(variant, args.metrics_dir) if variant
+                       else args.metrics_dir)
+        rows = runner.run(models, viruses, n_ref=args.n_ref,
+                          latent_dir=args.latent_dir, metrics_dir=metrics_dir,
+                          layers_mode=args.layers, max_workers=args.max_workers,
+                          dry_run=args.dry_run, allow_missing=args.allow_missing,
+                          with_pairwise=not (args.no_pairwise or variant),
+                          variant=variant)
+        if rows:
+            path = Path(metrics_dir or config.METRICS) / "summary_unseen.xlsx"
+            pd.DataFrame(rows).to_excel(path, index=False)
+            print(f"summary -> {config.relative(path)}  ({len(rows)} rows)")
 
 
 def stage_stats(args) -> None:
@@ -305,8 +340,6 @@ def stage_stats(args) -> None:
     style.set_style()
     models = _models_with_tables(args)
     statistics_figures.build(models, args.metrics_dir)
-    statistics_figures.build_genome_ci(models, args.metrics_dir, seed=args.seed,
-                                       n_boot=args.n_boot)
 
 
 def stage_figures(args) -> None:
@@ -338,11 +371,18 @@ def stage_figures(args) -> None:
         statistics_figures.draw_all(chosen_models, samples, tests)
 
 
-ALL_STAGES = (("prep", stage_prep), ("samples", stage_samples),
+def stage_scaling_distance(args) -> None:
+    """The tables of Fig. 8, at the layer chosen on the reference set."""
+    stage_metrics(argparse.Namespace(**{**vars(args), "scaling_distance": True,
+                                        "layers": "selected"}))
+
+
+ALL_STAGES = (("prep", stage_prep), ("samples", stage_samples), ("sweep", stage_sweep),
               ("select (word length)", stage_select), ("extract", stage_extract),
               ("benchmark", stage_benchmark), ("select (layer)", stage_select),
-              ("metrics", stage_metrics), ("stats", stage_stats),
-              ("figures", stage_figures))
+              ("metrics", stage_metrics),
+              ("metrics (scaling and distance)", stage_scaling_distance),
+              ("stats", stage_stats), ("figures", stage_figures))
 
 
 def stage_all(args) -> None:
@@ -350,7 +390,8 @@ def stage_all(args) -> None:
 
     ``select`` runs twice: the word length of the k-mer baselines is needed to
     extract them, the layer of the transformers needs their benchmark, which needs
-    their extraction.
+    their extraction.  ``metrics`` runs twice too: the main tables, then the
+    scaling/distance variants of Fig. 8 at the chosen layer.
     """
     for name, stage in ALL_STAGES:
         print(f"\n{'=' * 70}\n  {name}\n{'=' * 70}")
@@ -389,6 +430,16 @@ def build_parser() -> argparse.ArgumentParser:
     _common(samples, with_models=False)
     samples.set_defaults(func=stage_samples)
 
+    sweep = subparsers.add_parser("sweep", help="reference samples -> k-mer length "
+                                  "sweep (Fig. S1a)", description=stage_sweep.__doc__)
+    n_ref(sweep)
+    sweep.add_argument("--k-values", nargs="*", type=int, default=None,
+                       dest="sweep_k_values",
+                       help="word lengths to benchmark (default 1..10; a profile has 4^k "
+                            "columns, so k = 10 needs several GB per worker)")
+    _common(sweep, with_models=False)
+    sweep.set_defaults(func=stage_sweep)
+
     extract = subparsers.add_parser("extract", help="fragments -> vectors",
                                     description=stage_extract.__doc__)
     n_ref(extract)
@@ -415,7 +466,7 @@ def build_parser() -> argparse.ArgumentParser:
                         choices=["P5", "ARI", "silh"],
                         help=f"reference metric that picks the layer "
                              f"(default {config.REFERENCE_METRIC})")
-    select.add_argument("--n-ref", type=int, default=10,
+    select.add_argument("--sweep-samples", type=int, default=10,
                         help="reference samples used for the word-length sweep "
                              "(default 10; a sub-sample is enough to pick a parameter)")
     select.add_argument("--k-values", nargs="*", type=int, default=None,
@@ -434,20 +485,18 @@ def build_parser() -> argparse.ArgumentParser:
                          help="score every layer, or only the one chosen on the "
                               "reference set (default all; 'selected' is up to 32x "
                               "less work but leaves the per-layer figures empty)")
-    metrics.add_argument("--protocol", choices=["genome", "order", "both"], default="both",
-                         help="'genome': success = neighbour from the same genome "
-                              "(legacy P@k); 'order': success = neighbour from ANOTHER "
-                              "genome of the same order, own genome excluded "
-                              "(leave-genome-out); default both")
     metrics.add_argument("--no-pairwise", action="store_true",
                          help="skip the order-against-order tables of Fig. 7")
+    metrics.add_argument("--scaling-distance", action="store_true",
+                         help="instead of the main tables, score the models compared by "
+                              "standardised cosine under raw features and/or the "
+                              "Euclidean distance, into metrics/scaling_distance/ "
+                              "(Fig. 8; '--layers selected' is enough for the figure)")
     _common(metrics)
     metrics.set_defaults(func=stage_metrics)
 
     stats = subparsers.add_parser("stats", help="metric tables -> paired tests",
                                   description=stage_stats.__doc__)
-    stats.add_argument("--n-boot", type=int, default=10_000,
-                       help="bootstrap replicates for the genome-level intervals")
     _common(stats)
     stats.set_defaults(func=stage_stats)
 
@@ -471,13 +520,13 @@ def build_parser() -> argparse.ArgumentParser:
     everything.add_argument("--pooling", choices=pooling_module.MODES,
                             default=pooling_module.DEFAULT_MODE)
     everything.add_argument("--k-values", nargs="*", type=int, default=None)
+    everything.add_argument("--sweep-samples", type=int, default=10)
     everything.add_argument("--k-neighbours", type=int, default=config.PK_FOR_FIGURES)
     everything.add_argument("--select-by", default=config.REFERENCE_METRIC,
                             choices=["P5", "ARI", "silh"])
     everything.add_argument("--layers", choices=["all", "selected"], default="all")
-    everything.add_argument("--protocol", choices=["genome", "order", "both"], default="both")
     everything.add_argument("--no-pairwise", action="store_true")
-    everything.add_argument("--n-boot", type=int, default=10_000)
+    everything.add_argument("--scaling-distance", action="store_true", help=argparse.SUPPRESS)
     everything.add_argument("--which", default="all",
                             choices=["all", "main", "supplementary", "statistics"])
     everything.add_argument("--plot-only", action="store_true")
@@ -496,8 +545,9 @@ def _record(stage: str, args) -> None:
         return
     seeds = {"seed": args.seed}
     extra = {key: getattr(args, key) for key in
-             ("n_ref", "pooling", "protocol", "layers", "chunk_size", "max_chunks",
-              "min_length", "n_genomes", "n_chunks", "k", "allow_missing")
+             ("n_ref", "sweep_samples", "pooling", "layers", "chunk_size",
+              "max_chunks", "min_length", "n_genomes", "n_chunks", "k", "allow_missing",
+              "scaling_distance")
              if hasattr(args, key)}
     provenance.write(stage, argv=_ARGV, seeds=seeds,
                      models=[m.key for m in _models(args)] if hasattr(args, "models") else None,

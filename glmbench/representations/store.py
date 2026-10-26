@@ -57,13 +57,12 @@ def _load_pickle(path: Path, problems: list | None = None):
 
 # How the windows of one fragment are combined.  The ViraLM hook cuts every input
 # record into 1,000-nt windows, so a 2,000-nt fragment arrives as TWO entries,
-# ``{label}_{chunk}_0_1000`` and ``{label}_{chunk}_1000_2000``.  The first release kept
-# each window as its own point of the space: the sister window of the same fragment was
-# then always an admissible "same class" neighbour (self-exclusion removes only the
-# window itself), which inflated every P@k, CROSS P@k, ARI and silhouette of ViraLM
-# and slowed the decay of P@k with k.
+# ``{label}_{chunk}_0_1000`` and ``{label}_{chunk}_1000_2000``.  Kept as two points,
+# the sister window of the same fragment would always be an admissible "same class"
+# neighbour (self-exclusion removes only the window itself), which inflates every P@k,
+# CROSS P@k, ARI and silhouette of ViraLM.
 #     "mean"      one point per fragment: the mean of its window vectors (default)
-#     "windows"   one point per window, as in the first release (to reproduce it)
+#     "windows"   one point per window
 VIRALM_WINDOWS = "mean"
 
 

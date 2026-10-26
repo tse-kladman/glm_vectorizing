@@ -69,7 +69,7 @@ def test_jaccard_estimate_is_accurate():
 
     sets = [set(minhash._canonical_codes(sequence, 8).tolist()) for sequence in (left, right)]
     exact = len(sets[0] & sets[1]) / len(sets[0] | sets[1])
-    estimate = minhash.jaccard(minhash.sketch(left, 8, a, b), minhash.sketch(right, 8, a, b))
+    estimate = np.mean(minhash.sketch(left, 8, a, b) == minhash.sketch(right, 8, a, b))
     assert abs(exact - estimate) < 0.01
 
 
@@ -181,19 +181,3 @@ def test_rank_biserial_saturates_when_one_side_always_wins():
     assert statistics.rank_biserial(np.array([0.1, 0.2, 0.3])) == pytest.approx(1.0)
     assert statistics.rank_biserial(np.array([-0.1, -0.2])) == pytest.approx(-1.0)
 
-
-def test_the_larger_minhash_sketch_estimates_jaccard_closely():
-    """minhash1k exists to remove the sketch noise of s = 128 on 2 kb fragments."""
-    from glmbench import models as registry
-    from glmbench.representations import minhash as mh
-
-    model = registry.get("minhash1k")
-    assert model.sketch_size == 1024 and model in registry.resolve(["minhash1k"])
-    rng = np.random.default_rng(3)
-    x = "".join(rng.choice(list("ACGT"), 2000))
-    y = x[:1000] + "".join(rng.choice(list("ACGT"), 1000))
-    a, b = mh.hash_functions(model.sketch_size)
-    sx, sy = mh._canonical_codes(x, 6), mh._canonical_codes(y, 6)
-    exact = len(np.intersect1d(sx, sy)) / len(np.union1d(sx, sy))
-    estimate = mh.jaccard(mh.sketch(x, 6, a, b), mh.sketch(y, 6, a, b))
-    assert abs(estimate - exact) < 0.05

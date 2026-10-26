@@ -16,9 +16,7 @@ approximately, with standard error about sqrt(J(1-J)/s) (0.044 at J = 0.5, s = 1
 
 The sketch size matters for 2 kb fragments: two unrelated fragments already share
 J ~ 0.4 of their canonical 6-mers, so with s = 128 the estimate is about as noisy as
-the difference between related and unrelated fragments.  ``models.MINHASH_1K`` is the
-same representation with s = 1024 and a wider range of k, to show how much of the
-weakness of MinHash here is the sketch size.
+the difference between related and unrelated fragments.
 
 All files of one run must share ``seed``: sketches are only comparable under the
 same hash functions.
@@ -56,8 +54,7 @@ def _canonical_codes(sequence: str, k: int) -> np.ndarray:
 
 def _mix64(values: np.ndarray) -> np.ndarray:
     """MurmurHash3 fmix64 finaliser, cut to the lower 31 bits, so neighbouring k-mers
-    do not get neighbouring hashes.  (Earlier comments called this splitmix64; the
-    constants and the 33-bit shifts are those of fmix64.)"""
+    do not get neighbouring hashes."""
     with np.errstate(over="ignore"):
         x = values.astype(np.uint64)
         x ^= x >> np.uint64(33)
@@ -85,11 +82,6 @@ def sketch(sequence: str, k: int, a: np.ndarray, b: np.ndarray) -> np.ndarray:
     with np.errstate(over="ignore"):
         hashed = (a[:, None] * mixed[None, :] + b[:, None]) % MERSENNE
     return hashed.min(axis=1).astype(np.uint64)
-
-
-def jaccard(left: np.ndarray, right: np.ndarray) -> float:
-    """Estimated Jaccard index of two sketches: the fraction of agreeing positions."""
-    return float(np.mean(left == right))
 
 
 def from_fasta(path, k: int, sketch_size: int, seed: int = DEFAULT_SEED) -> dict:

@@ -6,17 +6,14 @@ the per-sample values -- rather than only a mean -- is what makes the paired tes
 in statistics.py possible, and what lets any figure be rebuilt without recomputing
 anything.
 
-    results/metrics/<model>/P@<k>_matrix_<virus>.xlsx          genome-level P@k (legacy name)
-    results/metrics/<model>/Porder@<k>_matrix_<virus>.xlsx     order-level P@k, leave-genome-out
-    results/metrics/<model>/cross_P@<k>_matrix_<virus>.xlsx    legacy RC proximity ("CROSS P@k")
-    results/metrics/<model>/ownrc_hit@<k>_matrix_<virus>.xlsx  RC of the fragment among its k nearest
-    results/metrics/<model>/ownrc_sim_matrix_<virus>.xlsx      similarity between a fragment and its RC
-    results/metrics/<model>/per_genome_<kind>_<virus>.csv.gz   the same, one row per genome
+    results/metrics/<model>/P@<k>_matrix_<virus>.xlsx          genome-level P@k
+    results/metrics/<model>/cross_P@<k>_matrix_<virus>.xlsx    RC proximity ("CROSS P@k")
     results/metrics/<model>/{ARI,P5,silh}.xlsx                 reference benchmark
     results/metrics/<model>/pairwise_<A>_vs_<B>/<name>_matrix.xlsx
-
-``kind`` in the per-genome files is one of ``genome``, ``order``, ``cross``,
-``ownrc``; the columns are ``layer, sample, genome, metric, value``.
+    results/metrics/scaling_distance/<variant>/<model>/...      the same under another
+                                                                scaling / distance (Fig. 8)
+    results/metrics/k_sweep/<model>_k_sweep.xlsx               word-length sweep (P@5)
+    results/metrics/kmer_sweep/kmer_sweep_results.xlsx         4-mer benchmark sweep (Fig. S1a)
 """
 
 from pathlib import Path
@@ -34,20 +31,22 @@ def model_dir(model: Model | str, metrics_dir: Path | None = None) -> Path:
     return Path(metrics_dir or config.METRICS) / key
 
 
+def scaling_distance_dir(variant: str, metrics_dir: Path | None = None) -> Path:
+    """Metrics folder of one scaling/distance variant (``models.SCALING_DISTANCE``)."""
+    return Path(metrics_dir or config.METRICS) / "scaling_distance" / variant
+
+
+def k_sweep_path(model: Model | str, metrics_dir: Path | None = None) -> Path:
+    key = model if isinstance(model, str) else model.key
+    return Path(metrics_dir or config.METRICS) / "k_sweep" / f"{key}_k_sweep.xlsx"
+
+
+def kmer_sweep_path(metrics_dir: Path | None = None) -> Path:
+    return Path(metrics_dir or config.METRICS) / "kmer_sweep" / "kmer_sweep_results.xlsx"
+
+
 def matrix_name(prefix: str, k: int, virus: str) -> str:
     return f"{prefix}@{k}_matrix_{virus}.xlsx"
-
-
-def own_rc_names(k: int, virus: str) -> str:
-    return f"ownrc_hit@{k}_matrix_{virus}.xlsx"
-
-
-def own_rc_similarity_name(virus: str) -> str:
-    return f"ownrc_sim_matrix_{virus}.xlsx"
-
-
-def per_genome_name(kind: str, virus: str) -> str:
-    return f"per_genome_{kind}_{virus}.csv.gz"
 
 
 def save_matrix(matrix: dict, path: Path) -> Path:
@@ -65,18 +64,6 @@ def load_matrix(path: Path) -> pd.DataFrame:
     frame = pd.read_excel(path).set_index("layer")
     frame.columns = [int(str(column).split("_")[1]) for column in frame.columns]
     return frame.sort_index().sort_index(axis=1)
-
-
-def save_per_genome(rows: list, path: Path) -> Path:
-    """Rows of (layer, sample, genome, metric, value) -> a compressed CSV."""
-    frame = pd.DataFrame(rows, columns=["layer", "sample", "genome", "metric", "value"])
-    path.parent.mkdir(parents=True, exist_ok=True)
-    frame.to_csv(path, index=False)
-    return path
-
-
-def load_per_genome(path: Path) -> pd.DataFrame:
-    return pd.read_csv(path, dtype={"layer": str})
 
 
 def load_model_matrix(model: Model | str, filename: str,
