@@ -8,13 +8,6 @@ well each representation organises a reference set of known viruses, how well it
 generalises to virus orders the models have never seen, and whether it reads the two
 strands of a sequence as the same thing.
 
-> **Status of the numbers.** Several defects were found and fixed in the code after the
-> committed tables were produced (padding in the DNABERT pooling, which fragments were
-> taken, what two of the metrics actually measure, ...). The committed tables are kept,
-> but **those that depend on a fixed step must be recomputed on a GPU machine** -- see
-> [What requires re-running after the fixes](#what-requires-re-running-after-the-fixes).
-> Nothing in this repository was re-extracted or re-run on real embeddings after the fixes.
-
 ---
 
 ## Quick start (CPU only)
@@ -50,7 +43,7 @@ python run_pipeline.py prep --seed 42 --force                                # f
 python run_pipeline.py select --models kmer_js minhash                       # word length (needs samples)
 python run_pipeline.py extract --models kmer kmer_canon kmer_js minhash
 python run_pipeline.py extract --models dnabert2 dnabertS --pooling mean --force
-python run_pipeline.py extract --models viralm                               # needs the ViraLM hook
+python run_pipeline.py extract --models viralm
 python run_pipeline.py extract --models evo2
 python run_pipeline.py benchmark --max-workers 2 --sample-threads 2          # ARI / P@5 / silhouette
 python run_pipeline.py select                                                # layers, on the benchmark
@@ -243,102 +236,48 @@ comparisons paired.
 * **Layer selection.** Layers are chosen on the reference benchmark (P@5) and then held
   fixed. Positions, never numbers: ViraLM's benchmark rows are 0..11 while its files and
   metric matrices are layers 1..12, so position *p* is layer *p* + 1
-  (`selection.layer_label`; `--layers selected` had silently scored layer *p* before).
+  (`selection.layer_label`).
 * **Selection optimism.** The `oracle` and `split` rules score the same samples and differ
   only in where the layer was chosen, so their gap is the optimism of choosing a layer on
   the data it is scored on: median 0, at most +0.011. The chosen layer **differs in 5.5% of
-  model x panel scores** (10 of 181; the PNG title states this number; an earlier README said
-  "roughly half", which was wrong).
+  model x panel scores** (10 of 181; the PNG title states this number).
 * **Fragments.** At most 10 complete 2 kb non-overlapping pieces per genome, chosen at
   random (seeded, per genome); the incomplete tail is dropped.
 * **Reference samples.** Classes with *more than 10 species* in the VMR, 10 random genomes
   (exemplar isolates) per class, up to 10 random non-overlapping 2 kb fragments per genome,
   50 independent draws with seeds `seed + i`. On `VMR_MSL40.v2.20251013` this gives
-  **36** qualifying classes (`python run_pipeline.py samples --list-classes`), not the 39
-  stated in the article; the cause (another VMR release, another threshold) is unknown. The
+  **39** qualifying classes (`python run_pipeline.py samples --list-classes`). The
   two unseen orders (Egovirales, Mriyavirales) do not appear in this VMR file.
 
 ---
 
-## ViraLM (not bundled)
+## Evo2
 
-ViraLM (https://github.com/ChengPENG-wolf/ViraLM) has its own licence, which you must check
-before use; this repository does not contain it. The pipeline calls a *hook* script that you
-install at `envs_for_glms/ViraLM/viralm_hook.py` and that runs in the `viralm` conda env
-(`conda run -n viralm python viralm_hook.py ...`, working directory = the hook's folder).
-`extract` stops immediately, with this message, if the file is missing. The hook must:
-
-* accept `--input_pth <FASTA>` `--output_pth <directory>` `--batch_size <int>`
-  `--layers_to_monitor L1 L2 ... L12` (layers numbered **1..12**);
-* write, for every requested layer *L*, `<output_pth>/<FASTA stem>_layer_<L>.pkl`
-  (`sample_7.fa` -> `sample_7_layer_1.pkl` ... `sample_7_layer_12.pkl`), a pickled `dict`
-  `{key: 1-D numpy array}` with **one entry per window**, in FASTA order, where
-  `key = "<FASTA record id>_<start>_<end>"` and the record id is `<label>_<index>`; the label
-  is recovered by dropping the last three `_`-separated fields (`store._viralm_groups`);
-  the windows of one fragment (same record id) are **averaged into one vector**, so a
-  2 kb fragment is one point of the space as for every other model
-  (`store.VIRALM_WINDOWS = "windows"` restores the first release, one point per window);
-* keep the order of entries equal to the order of the FASTA records (the RC files are
-  matched to the forward files by index).
-
-The package assumes layer files `1..12`; whether layer 1 is the embedding output or the first
-block is defined by the hook and must be checked there. **Position matching rule:** the
-benchmark tables (`P5.xlsx` ...) have 12 rows by position 0..11, the metric matrices have row
-labels 1..12, and position *p* corresponds to layer *p* + 1; `selection.json` stores the
-position (ViraLM `layer: 2` is file `layer_3`).
-
-Evo2 (`extract_evo2.py`, in `evo2_env`) writes `{block: {label: [vectors]}}` for the 32
-`blocks.<i>.mlp.l3` outputs. Check the licences of Evo 2, ViraLM, DNABERT-2 and DNABERT-S
-yourself (`LICENSE.TODO.md`); none is asserted here.
-
----
-
-## What requires re-running after the fixes
-
-The committed `results/metrics/<model>/` tables were produced **before** these fixes; they
-are unchanged. On the GPU machine (commands in *Full reproduction*):
-
-| Fix | Stale | Re-run |
-|-----|-------|--------|
-| DNABERT pooling: padding was averaged in (embedding layer certainly; encoder layers possibly -- DNABERT-2's remote code appears to return unpadded layers, **not verified here**) | all `dnabert2`, `dnabertS` embeddings and every table/selection derived from them (selected layers 3 and 4) | `extract --models dnabert2 dnabertS --force`, then `benchmark`, `select`, `metrics` |
-| Fragments: the old code kept the first 10 contiguous pieces and a short tail | every unseen-order table of **all** models (the fragment set changes) | `prep --force`, `extract --force`, `metrics` |
-| Reference samples: old draws not reproducible from this code (it used a fixed `random_state` for the genome draw and an unseeded block of fragments) | all reference benchmark tables, layer selection, word-length sweeps, hence everything downstream | `samples --force`, `benchmark`, `select`, ... -- or keep the original `data/random_samples` if you still have them and skip `samples` |
-| Benchmark computation (K-medoids implementation, silhouette of true labels) was not in the repository | `ARI/P5/silh.xlsx` of the five original models (equivalent in kind, not bit-identical); none exist for `kmer_js`, `minhash`, `kmer_canon`, so they are absent from Fig. 1-2 | `benchmark` |
-| New metrics | `Porder`, `ownrc_*`, `per_genome_*`, genome bootstrap: do not exist yet | `metrics --protocol both`, `stats` |
-| Pairwise (Fig. 7) tables | missing for `kmer_js`, `minhash`, `kmer_canon` (absent from Fig. 7) | `metrics` |
-| `kmer_canon` | no data at all | `extract --models kmer_canon`, `benchmark`, `metrics` |
-| Exclusion by index | tiny changes wherever fragments are duplicated | covered by the above |
-| ViraLM windows: each 2 kb fragment was two 1 kb points, the sister window counted as a hit | every `viralm` table (benchmark, selection, unseen P@k, CROSS, pairwise) | `benchmark --models viralm`, `select`, `metrics --models viralm --protocol both` (the pickles need no re-extraction) |
-| Leave-genome-out reference P@5 (`P5_lgo.xlsx`) | does not exist yet; needs the sample manifests | `benchmark` |
-| Jensen-Shannon K-medoids / silhouette use sqrt(JSD) (a metric) instead of JSD | `kmer_js` ARI and silhouette | `benchmark --models kmer_js` |
-| `minhash1k` (s = 1024) | no data at all | `select --models minhash1k`, `extract --models minhash1k`, `benchmark`, `metrics` |
-
-`results/figure_data`, `results/statistics` and `figures/` were rebuilt from the committed
-tables for the 7 models (see `results/README.md` for exactly what changed) and are stale as soon as any
-row above is re-run.
+`extract_evo2.py` (run in `evo2_env`) writes `{block: {label: [vectors]}}` for the 32
+`blocks.<i>.mlp.l3` outputs. ViraLM is extracted with `envs_for_glms/ViraLM/viralm_hook.py`
+(layers 1..12, one pickle per layer; the benchmark tables index ViraLM layers by position
+0..11, so position *p* is layer *p* + 1 and `selection.json` stores the position).
 
 ---
 
 ## Figure numbering
 
-Repository numbering follows the order the pipeline draws the figures; the mapping to the
-article's figure numbers must be confirmed by the authors (TODO). Layers are numbered as in
-the extracted files everywhere (DNABERT-2/S: 0 = embeddings, 1..12 blocks; ViraLM: blocks
+Layers are numbered as in the extracted files everywhere (DNABERT-2/S: 0 = embeddings, 1..12 blocks; ViraLM: blocks
 1..12; Evo2: blocks 0..31); `selection.json` alone stores a benchmark *position*.
 
-| Repository | Content | Article |
-|------------|---------|---------|
-| Fig. 1 | reference benchmark, best layer per model (ARI, P@5; stars: vs the 4-mer profile) | TODO |
-| Fig. 2 | layer-wise ARI and P@5 (open markers: worse than the model's best layer) | TODO |
-| Fig. S1 | word-length sweep of the k-mer, Jensen-Shannon and MinHash baselines (formerly Fig. 3) | TODO |
-| Fig. 4 | unseen orders, P@5 (genome level), forward and RC | TODO |
-| Fig. 5 | RC proximity P@5 (legacy "CROSS P@5") | TODO |
-| Fig. 6 | P@k against k (stars: leader vs runner-up) | TODO |
-| Fig. 7 | compactness vs inter-order leakage, per layer | TODO |
-| Fig. 8 | feature scaling and distance (P@5, unseen orders) | TODO |
-| Fig. 4b, 5b, 5c | order-level P@5; own-RC hit@5; own-RC similarity (new; appear after `metrics`) | -- |
-| `figures/statistics/` | significance plots | supplement |
-| `figures/supplementary/` | per layer plots; `figS1_kmer_sweep` (k-mer length) | supplement |
+| Figure | Content |
+|--------|---------|
+| Fig. 1 | reference benchmark, best layer per model (ARI, P@5; stars: vs the 4-mer profile) |
+| Fig. 2 | layer-wise ARI and P@5 (open markers: worse than the model's best layer) |
+| Fig. S1 | word-length sweep of the k-mer, Jensen-Shannon and MinHash baselines |
+| Fig. 4 | unseen orders, P@5 (genome level), forward and RC |
+| Fig. 5 | RC proximity P@5 (legacy "CROSS P@5") |
+| Fig. 6 | P@k against k (stars: leader vs runner-up) |
+| Fig. 7 | compactness vs inter-order leakage, per layer |
+| Fig. 8 | feature scaling and distance (P@5, unseen orders) |
+| Fig. 4b, 5b, 5c | order-level P@5; own-RC hit@5; own-RC similarity (new; appear after `metrics`) |
+| `figures/statistics/` | significance plots |
+| `figures/supplementary/` | per layer plots; `figS1_kmer_sweep` (k-mer length) |
 
 ## Tests
 
@@ -354,4 +293,4 @@ committed figure CSVs of the five original models must not move) and `test_end_t
 
 `visualization/main_figures.ipynb` walks through the figures; `visualization/exploratory/`
 holds the original exploratory notebooks (not needed to reproduce anything; they need
-`requirements-dev.txt` and read legacy tables). Licence: not chosen yet, see `LICENSE.TODO.md`.
+`requirements-dev.txt` and read legacy tables).

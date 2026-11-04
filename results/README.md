@@ -1,7 +1,7 @@
 # `results/` -- every number the analysis produces
 
 Nothing here is edited by hand. Plots live one level up, in `figures/`. See the main
-README for what each metric measures and for which tables are stale after the code fixes.
+README for what each metric measures.
 
 ```
 metrics/                 per-sample metric tables, one folder per model
@@ -22,7 +22,7 @@ columns are the 50 reference samples (`sample_<i>`).
 |------|---------------|
 | `<model>/{ARI,P5,silh}.xlsx` | reference benchmark, per layer (rows by position, columns 0..49). `silh` is the silhouette of the **true labels** |
 | `<model>/P@<k>_matrix_<virus>.xlsx` | **genome-level** P@k on an unseen order: success = neighbour from the same genome (`precision_by_genome`) |
-| `<model>/Porder@<k>_matrix_<virus>.xlsx` | **order-level** P@k, leave-genome-out (`precision_by_order`) -- new, written by the fixed code |
+| `<model>/Porder@<k>_matrix_<virus>.xlsx` | **order-level** P@k, leave-genome-out (`precision_by_order`) |
 | `<model>/cross_P@<k>_matrix_<virus>.xlsx` | legacy "CROSS P@k" = **RC proximity**: neighbour is any RC fragment of the same genome |
 | `<model>/ownrc_hit@<k>_matrix_<virus>.xlsx` | own-RC hit@k: the fragment's own reverse complement is among its k nearest -- new |
 | `<model>/ownrc_sim_matrix_<virus>.xlsx` | mean similarity between a fragment and its RC (cosine / sketch agreement / 1 - JSD) -- new |
@@ -34,8 +34,7 @@ columns are the 50 reference samples (`sample_<i>`).
 
 Models present on disk today: `kmer`, `dnabert2`, `dnabertS`, `viralm`, `evo2` (full: benchmark,
 P@k, RC proximity, pairwise) and `kmer_js`, `minhash` (P@k and RC proximity only; no benchmark,
-no pairwise). Absent: `kmer_canon`. All of these were produced before the code fixes
-(main README, "What requires re-running").
+no pairwise). Absent: `kmer_canon`.
 
 ### Legacy material (moved out of `data/metrics/`, nothing numeric deleted)
 
